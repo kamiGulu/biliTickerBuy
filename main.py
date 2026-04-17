@@ -23,7 +23,7 @@ def main():
     gradio_parent.add_argument(
         "--server_name",
         type=str,
-        default=os.environ.get("BTB_SERVER_NAME", "127.0.0.1"),
+        default=os.environ.get("BTB_SERVER_NAME", "0.0.0.0"),
         help='Server name for Gradio. Defaults to env "BTB_SERVER_NAME" or 127.0.0.1.',
     )
     gradio_parent.add_argument(

@@ -15,7 +15,7 @@ def exit_app_ui():
 def ticker_cmd(args: Namespace):
     from tab.go import go_tab
     from tab.problems import problems_tab
-    from tab.settings import setting_tab
+    from tab.settings import setting_tab_v2
     from tab.log import log_tab
 
     from util.LogConfig import loguru_config
@@ -31,17 +31,22 @@ def ticker_cmd(args: Namespace):
 
     with gr.Blocks(
         title="biliTickerBuy",
+        css="assets/style.css",
         head="""<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>""",
     ) as demo:
         gr.Markdown(header)
-        with gr.Tab("生成配置"):
-            setting_tab()
-        with gr.Tab("操作抢票"):
-            go_tab(demo)
-        with gr.Tab("项目说明"):
-            problems_tab()
-        with gr.Tab("日志查看"):
-            log_tab()
+        with gr.Tabs() as tabs:
+            with gr.Tab("生成配置", id="settings"):
+                settings_mount = gr.Column()
+            with gr.Tab("操作抢票", id="go"):
+                go_handles = go_tab(demo)
+            with gr.Tab("项目说明", id="problems"):
+                problems_tab()
+            with gr.Tab("日志查看", id="logs"):
+                log_tab()
+
+        with settings_mount:
+            setting_tab_v2(go_handles=go_handles, tabs=tabs)
 
     is_docker = os.path.exists("/.dockerenv") or os.environ.get("BTB_DOCKER") == "1"
     demo.launch(

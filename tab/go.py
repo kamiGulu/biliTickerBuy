@@ -62,93 +62,128 @@ def _resolve_sale_start(project_detail: dict, sku_id: int) -> datetime.datetime 
     return None
 
 
-def go_tab(demo: gr.Blocks):
-    with gr.Column(elem_classes="!gap-5"):
-        with gr.Column(
-            elem_classes="!gap-4 !rounded-2xl !border !border-slate-200 !bg-gradient-to-br !from-sky-50 !via-white !to-cyan-50 !p-5 !shadow-sm"
-        ):
-            gr.Markdown(
-                """
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <p class="text-lg font-semibold text-slate-900">启动抢票</p>
-                        <p class="mt-2 text-sm leading-6 text-slate-600">
-                            上传一个或多个配置文件，设置抢票时间后即可批量启动任务。
-                        </p>
-                    </div>
-                    <span class="rounded-full border border-sky-200 bg-white px-3 py-1 text-xs font-medium text-sky-700">
-                        抢票入口
-                    </span>
-                </div>
-                """,
-                elem_classes="!p-0",
+def _read_first_config_text(files) -> str:
+    if not files:
+        return ""
+    try:
+        with open(files[0], "r", encoding="utf-8") as file:
+            return file.read()
+    except Exception as e:
+        return str(e)
+
+
+def autofill_time_from_files(files):
+    if not files:
+        gr.Warning("请先上传至少一个抢票配置文件。")
+        return ""
+
+    sale_start_items: list[tuple[str, datetime.datetime]] = []
+    adjusted_now = datetime.datetime.fromtimestamp(
+        time.time() + time_service.get_timeoffset()
+    )
+
+    for filepath in files:
+        with open(filepath, "r", encoding="utf-8") as file:
+            config = json.load(file)
+
+        try:
+            project_id = int(config["project_id"])
+            sku_id = int(config["sku_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise gr.Error(
+                f"{os.path.basename(filepath)} 缺少 project_id 或 sku_id"
+            ) from exc
+
+        project_detail = _fetch_project_detail(project_id)
+        sale_start = _resolve_sale_start(project_detail, sku_id)
+        if sale_start is None:
+            raise gr.Error(
+                f"{os.path.basename(filepath)} 未找到对应票档的 sale_start，请重新生成该配置。"
             )
-            with gr.Row(elem_classes="!items-stretch !gap-3"):
+        sale_start_items.append((os.path.basename(filepath), sale_start))
+
+    latest_sale_start = max(sale_start for _, sale_start in sale_start_items)
+    unique_sale_starts = sorted({sale_start for _, sale_start in sale_start_items})
+    sale_start_lines = "\n".join(
+        f"{filename}: {sale_start.strftime('%Y-%m-%d %H:%M:%S')}"
+        for filename, sale_start in sale_start_items
+    )
+
+    if latest_sale_start <= adjusted_now:
+        gr.Warning(
+            "所有配置对应票档都已经过起售时间，不自动填写抢票时间。\n"
+            f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n{sale_start_lines}"
+        )
+        return ""
+
+    autofill_value = latest_sale_start.strftime("%Y-%m-%dT%H:%M:%S")
+    if len(unique_sale_starts) == 1:
+        gr.Info(
+            "已自动填写抢票时间。\n"
+            f"自动填写值: {latest_sale_start.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{sale_start_lines}"
+        )
+        return autofill_value
+
+    gr.Warning(
+        "抢票的起始时间不一样，已自动填写为最晚的起售时间，确保所有票档届时都已开始抢票。\n"
+        f"自动填写值: {latest_sale_start.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"{sale_start_lines}"
+    )
+    return autofill_value
+
+
+def go_tab(demo: gr.Blocks):
+    with gr.Column(elem_classes="btb-plain-page !gap-3"):
+        with gr.Column(elem_classes="btb-pane !gap-3"):
+            gr.Markdown("### 操作抢票", elem_classes="!p-0")
+            with gr.Column(elem_classes="btb-pane-sub !gap-3"):
                 upload_ui = gr.Files(
-                    label="上传多个配置文件,每一个上传的文件都会启动一个抢票程序",
+                    label="配置文件",
                     file_count="multiple",
-                    scale=5,
                 )
+
+            with gr.Accordion(
+                label="配置预览",
+                open=False,
+                elem_classes="btb-pane-sub",
+            ):
                 ticket_ui = gr.TextArea(
-                    label="查看",
-                    info="只能通过上传文件方式上传信息",
+                    label="配置预览",
                     interactive=False,
                     visible=False,
-                    scale=4,
+                    lines=12,
                 )
-            with gr.Row(variant="compact"):
-                gr.HTML(
-                    """
-                <div class="rounded-2xl border border-rose-200 bg-gradient-to-r from-rose-50 via-white to-orange-50 p-5 shadow-sm">
-                    <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                            <p class="text-base font-semibold text-slate-900">
-                                选择抢票时间
-                            </p>
-                            <p class="mt-1 text-sm leading-6 text-slate-600">
-                                程序已经提前帮你校准时间，请设置成<strong class="text-rose-600">开票时间</strong>。
-                                切勿设置为开票前时间，否则<strong class="text-rose-600">有封号风险</strong>。
-                            </p>
-                        </div>
-                        <span class="rounded-full border border-rose-200 bg-white px-3 py-1 text-xs font-medium text-rose-600">
-                            精确到秒
-                        </span>
-                    </div>
-                    <label class="block">
-                        <span for="datetime" class="mb-2 block text-sm font-medium text-slate-700">
-                            抢票开始时间
-                        </span>
-                        <input 
-                            type="datetime-local" 
-                            id="datetime" 
-                            name="datetime" 
-                            step="1"
-                            class="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base shadow-sm transition-all
-                                focus:border-blue-400 focus:outline-none focus:ring-4 focus:ring-blue-100"
-                        >
-                    </label>
-                    <p class="mt-3 text-xs text-slate-500">
-                        会根据已上传配置自动检查每个票档的起售时间，并回填可安全开抢的时间点。
-                    </p>
-                </div>
-                """,
-                    label="选择抢票的时间",
-                )
-            with gr.Row(elem_classes="!justify-end"):
+
+            with gr.Row(equal_height=True, elem_classes="btb-action-row !gap-3 !flex-wrap"):
+                with gr.Column(scale=6, min_width=320):
+                    time_picker_html = gr.HTML(
+                        """
+                        <label class="block">
+                            <span for="datetime" class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                                抢票开始时间
+                            </span>
+                            <input 
+                                type="datetime-local" 
+                                id="datetime" 
+                                name="datetime" 
+                                step="1"
+                                class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                            >
+                        </label>
+                        """,
+                        label="抢票开始时间",
+                    )
                 auto_fill_time_btn = gr.Button(
                     "自动填写抢票时间",
-                    elem_classes="!rounded-xl !border !border-slate-300 !bg-white !px-4 !text-slate-900 !shadow-sm hover:!bg-slate-100 !transition",
-                    scale=0,
+                    scale=1,
                     min_width=220,
                 )
 
         def upload(filepath):
-            try:
-                with open(filepath[0], "r", encoding="utf-8") as file:
-                    content = file.read()
-                return gr.update(content, visible=True)
-            except Exception as e:
-                return str(e)
+            return gr.update(value=_read_first_config_text(filepath), visible=bool(filepath))
 
         def file_select_handler(select_data: SelectData, files):
             file_label = files[select_data.index]
@@ -169,84 +204,23 @@ def go_tab(demo: gr.Blocks):
         upload_ui.select(file_select_handler, upload_ui, ticket_ui)
 
         def auto_fill_time(files):
-            if not files:
-                gr.Warning("请先上传至少一个抢票配置文件。")
-                return ""
-
-            sale_start_items: list[tuple[str, datetime.datetime]] = []
-            adjusted_now = datetime.datetime.fromtimestamp(
-                time.time() + time_service.get_timeoffset()
-            )
-
-            for filepath in files:
-                with open(filepath, "r", encoding="utf-8") as file:
-                    config = json.load(file)
-
-                try:
-                    project_id = int(config["project_id"])
-                    sku_id = int(config["sku_id"])
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise gr.Error(
-                        f"{os.path.basename(filepath)} 缺少 project_id 或 sku_id"
-                    ) from exc
-
-                project_detail = _fetch_project_detail(project_id)
-                sale_start = _resolve_sale_start(project_detail, sku_id)
-                if sale_start is None:
-                    raise gr.Error(
-                        f"{os.path.basename(filepath)} 未找到对应票档的 sale_start，请重新生成该配置。"
-                    )
-                sale_start_items.append((os.path.basename(filepath), sale_start))
-
-            latest_sale_start = max(sale_start for _, sale_start in sale_start_items)
-            unique_sale_starts = sorted(
-                {sale_start for _, sale_start in sale_start_items}
-            )
-            sale_start_lines = "\n".join(
-                f"{filename}: {sale_start.strftime('%Y-%m-%d %H:%M:%S')}"
-                for filename, sale_start in sale_start_items
-            )
-
-            if latest_sale_start <= adjusted_now:
-                gr.Warning(
-                    "所有配置对应票档都已经过起售时间，不自动填写抢票时间。\n"
-                    f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n{sale_start_lines}"
-                )
-                return ""
-
-            autofill_value = latest_sale_start.strftime("%Y-%m-%dT%H:%M:%S")
-            if len(unique_sale_starts) == 1:
-                gr.Info(
-                    "已自动填写抢票时间。\n"
-                    f"自动填写值: {latest_sale_start.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"{sale_start_lines}"
-                )
-                return autofill_value
-
-            gr.Warning(
-                "抢票的起始时间不一样，已自动填写为最晚的起售时间，确保所有票档届时都已开始抢票。\n"
-                f"自动填写值: {latest_sale_start.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"{sale_start_lines}"
-            )
-            return autofill_value
+            return autofill_time_from_files(files)
 
         with gr.Accordion(
             label="高级设置",
             open=False,
-            elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+            elem_classes="btb-card",
         ):
             gr.Markdown(
                 """
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p class="text-base font-semibold text-slate-900">高级设置</p>
-                        <p class="mt-1 text-sm leading-6 text-slate-600">
+                        <p class="text-base font-semibold text-slate-900 dark:text-slate-100">高级设置</p>
+                        <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">
                             这里包含代理、成功提醒、提示音和杂项选项。大多数情况下不需要展开修改。
                         </p>
                     </div>
-                    <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+                    <span class="btb-badge-amber">
                         可选配置
                     </span>
                 </div>
@@ -257,7 +231,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Accordion(
                 label="填写你的代理服务器[可选]",
                 open=False,
-                elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+                elem_classes="btb-card",
             ):
                 gr.Markdown("""
                         > **注意**：
@@ -289,7 +263,7 @@ def go_tab(demo: gr.Blocks):
 
                 test_proxy_btn = gr.Button(
                     "🔍 测试代理连通性",
-                    elem_classes="!rounded-xl !border !border-sky-200 !bg-sky-100 !text-sky-950 !shadow-sm hover:!bg-sky-200 !transition",
+                    elem_classes="!rounded-xl !border border-sky-200 dark:border-sky-900 !transition",
                 )
                 test_timeout_ui = gr.Number(
                     label="测试代理超时时间(秒)",
@@ -328,7 +302,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Accordion(
                 label="配置抢票成功后播放音乐[可选]",
                 open=False,
-                elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+                elem_classes="btb-card",
             ):
                 with gr.Row():
                     audio_path_ui = gr.Audio(
@@ -341,7 +315,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Accordion(
                 label="配置抢票推送消息[可选]",
                 open=False,
-                elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+                elem_classes="btb-card",
             ):
                 gr.Markdown(
                     """
@@ -398,7 +372,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Accordion(
                 label="Ntfy配置",
                 open=False,
-                elem_classes="!rounded-2xl !border !border-slate-200 !bg-slate-50 !shadow-sm",
+                elem_classes="btb-card",
             ):
                 ntfy_ui = gr.Textbox(
                     value=(ConfigDB.get("ntfyUrl") or ""),
@@ -410,7 +384,7 @@ def go_tab(demo: gr.Blocks):
                 with gr.Accordion(
                     label="Ntfy认证配置[可选]",
                     open=False,
-                    elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+                    elem_classes="btb-card",
                 ):
                     with gr.Row():
                         ntfy_username_ui = gr.Textbox(
@@ -448,7 +422,7 @@ def go_tab(demo: gr.Blocks):
 
                     test_ntfy_button = gr.Button(
                         "测试Ntfy连接",
-                        elem_classes="!rounded-xl !border !border-sky-200 !bg-sky-100 !text-sky-950 !shadow-sm hover:!bg-sky-200 !transition",
+                        elem_classes="!rounded-xl !border border-sky-200 dark:border-sky-900 !transition",
                     )
                     test_ntfy_result = gr.Textbox(label="测试结果", interactive=False)
                     test_ntfy_button.click(
@@ -459,7 +433,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Column():
                 test_all_push_button = gr.Button(
                     "🧪 测试所有推送",
-                    elem_classes="!rounded-xl !border !border-slate-300 !bg-white !text-slate-900 !shadow-sm hover:!bg-slate-100 !transition",
+                    elem_classes="!rounded-xl !border border-slate-300 dark:border-slate-600 !transition",
                 )
                 test_push_result = gr.Textbox(label="推送测试结果", interactive=False)
 
@@ -545,7 +519,7 @@ def go_tab(demo: gr.Blocks):
             with gr.Accordion(
                 label="杂项配置",
                 open=False,
-                elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+                elem_classes="btb-card",
             ):
                 show_random_message_ui = gr.Checkbox(
                     label="关闭群友语录",
@@ -554,11 +528,11 @@ def go_tab(demo: gr.Blocks):
                 )
 
         with gr.Row(
-            elem_classes="!items-end !gap-3 !rounded-2xl !border !border-slate-200 !bg-white !p-4 !shadow-sm"
+            elem_classes="btb-card !items-end !gap-3"
         ):
             interval_ui = gr.Number(
                 label="抢票间隔",
-                value=1000,
+                value=300,
                 minimum=1,
                 info="设置抢票请求之间的时间间隔（单位：毫秒），建议不要设置太小",
             )
@@ -669,7 +643,7 @@ def go_tab(demo: gr.Blocks):
 
     go_btn = gr.Button(
         "开始抢票",
-        elem_classes="!rounded-xl !border !border-emerald-200 !bg-emerald-100 !px-5 !text-emerald-950 !shadow-sm hover:!bg-emerald-200 !transition",
+        elem_classes="!rounded-xl !border border-emerald-300 dark:border-emerald-600 !px-5 !transition",
     )
 
     _time_tmp = gr.Textbox(visible=False)
@@ -678,19 +652,6 @@ def go_tab(demo: gr.Blocks):
         fn=auto_fill_time,
         inputs=upload_ui,
         outputs=_auto_fill_time_tmp,
-    ).then(
-        fn=None,
-        inputs=_auto_fill_time_tmp,
-        outputs=_time_tmp,
-        js="""
-        (value) => {
-            const input = document.getElementById("datetime");
-            if (input) {
-                input.value = value || "";
-            }
-            return value || "";
-        }
-        """,
     )
     go_btn.click(
         fn=None,
@@ -747,3 +708,24 @@ def go_tab(demo: gr.Blocks):
             show_random_message_ui,
         ],
     )
+
+    _auto_fill_time_tmp.change(
+        fn=None,
+        inputs=_auto_fill_time_tmp,
+        outputs=_time_tmp,
+        js="""
+        (value) => {
+            const input = document.getElementById("datetime");
+            if (input) {
+                input.value = value || "";
+            }
+            return value || "";
+        }
+        """,
+    )
+
+    return {
+        "upload_ui": upload_ui,
+        "ticket_ui": ticket_ui,
+        "auto_time_ui": _auto_fill_time_tmp,
+    }

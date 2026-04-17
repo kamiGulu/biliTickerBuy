@@ -109,35 +109,34 @@ def _render_ticket_info_html(
     badge: str | None = None,
     hint: str | None = None,
 ) -> str:
-    chinese_font = "'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif"
     badge_html = (
-        f'<span style="font-family: {chinese_font};" class="rounded-full border border-sky-200 bg-white px-3 py-1 text-xs font-medium text-sky-700">{html.escape(badge)}</span>'
+        f'<span class="btb-badge-blue">{html.escape(badge)}</span>'
         if badge
         else ""
     )
     items_html = "".join(
         (
-            f'<div style="font-family: {chinese_font};" class="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">'
-            f'<p class="text-xs font-medium tracking-wide text-slate-500">{html.escape(label)}</p>'
-            f'<p class="mt-1 text-sm text-slate-800 break-all">{html.escape(value)}</p>'
+            f'<div class="btb-stat">'
+            f'<p class="btb-stat-label">{html.escape(label)}</p>'
+            f'<p class="btb-stat-value">{html.escape(value)}</p>'
             "</div>"
         )
         for label, value in lines
     )
     hint_html = (
-        f'<p style="font-family: {chinese_font};" class="mt-3 text-xs leading-5 text-slate-400">{html.escape(hint)}</p>'
+        f'<p class="btb-ticket-hint">{html.escape(hint)}</p>'
         if hint
         else ""
     )
     return f"""
-    <div style="font-family: {chinese_font};" class="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-sky-50 p-4 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-3">
+    <div class="btb-ticket-info">
+        <div class="flex flex-wrap items-start justify-between gap-2">
             <div>
-                <p class="text-sm font-semibold text-slate-900">{html.escape(title)}</p>
+                <p class="btb-ticket-title">{html.escape(title)}</p>
             </div>
             {badge_html}
         </div>
-        <div class="mt-3 grid gap-3 md:grid-cols-2">
+        <div class="btb-ticket-grid">
             {items_html}
         </div>
         {hint_html}
@@ -377,6 +376,14 @@ def on_submit_all(
             raise gr.Error("没有填写地址", duration=5)
         ticket_cur: dict[str, Any] = ticket_value[ticket_info]
         people_cur = [buyer_value[item] for item in people_indices]
+        ticket_limit = _read_positive_int(
+            (ticket_cur["ticket"].get("static_limit") or {}).get("num")
+        )
+        if ticket_limit is not None and len(people_indices) > ticket_limit:
+            raise gr.Error(
+                f"当前票档单次最多可购买 {ticket_limit} 张，你选择了 {len(people_indices)} 位实名人，请减少人数后再生成配置。",
+                duration=6,
+            )
         ticket_id = extract_id_from_url(ticket_id)
         if ticket_id is None:
             raise gr.Error(
@@ -448,33 +455,33 @@ def upload_file(filepath):
 
 
 def setting_tab():
-    with gr.Column(elem_classes="!gap-5"):
+    with gr.Column(elem_classes="btb-compact-page !gap-3"):
         # 顶部提示卡片
         gr.Markdown(
             """
-        <div class="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-orange-50 p-5 shadow-sm">
+        <div class="btb-card btb-card-amber">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <p class="text-lg font-semibold text-slate-900">使用前必读</p>
-                    <p class="mt-2 text-sm leading-6 text-slate-600">
+                    <p class="text-lg font-semibold text-slate-900 dark:text-slate-100">使用前必读</p>
+                    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">
                         请确保在抢票前已完成基础资料填写，否则后续生成配置时可能没有可选项。
                     </p>
                 </div>
-                <span class="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-700">
+                <span class="btb-badge-amber">
                     准备检查
                 </span>
             </div>
             <div class="mt-4 grid gap-3 md:grid-cols-2">
-                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <p class="text-sm font-semibold text-slate-800">收货地址</p>
-                    <p class="mt-1 text-sm text-slate-600">会员购中心 → 地址管理</p>
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3">
+                    <p class="text-sm font-semibold text-slate-800 dark:text-slate-200">收货地址</p>
+                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">会员购中心 → 地址管理</p>
                 </div>
-                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <p class="text-sm font-semibold text-slate-800">购买人信息</p>
-                    <p class="mt-1 text-sm text-slate-600">会员购中心 → 购买人信息</p>
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3">
+                    <p class="text-sm font-semibold text-slate-800 dark:text-slate-200">购买人信息</p>
+                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">会员购中心 → 购买人信息</p>
                 </div>
             </div>
-            <p class="mt-4 text-xs leading-5 text-slate-500">
+            <p class="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-500">
                 即使暂时不需要，也建议提前填写完整，避免生成表单时没有任何候选项。
             </p>
         </div>
@@ -483,21 +490,19 @@ def setting_tab():
         )
 
         # 登录信息卡片
-        with gr.Column(
-            elem_classes="!gap-4 !rounded-2xl !border !border-slate-200 !bg-gradient-to-br !from-rose-50 !via-white !to-sky-50 !p-5 !shadow-sm"
-        ):
+        with gr.Column(elem_classes="btb-card btb-card-rose btb-card-compact !gap-3"):
             gr.Markdown(
                 """
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p class="text-lg font-semibold text-slate-900">账号登录</p>
-                        <p class="mt-2 text-sm leading-6 text-slate-600">
+                        <p class="text-lg font-semibold text-slate-900 dark:text-slate-100">账号登录</p>
+                        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">
                             如果遇到登录问题，可使用
-                            <a href="https://login.bilibili.bi/" class="font-medium text-sky-700 underline decoration-sky-300 underline-offset-4 hover:text-sky-900" target="_blank">备用登录入口</a>。
+                            <a href="https://login.bilibili.bi/" class="font-medium text-sky-700 dark:text-sky-400 underline decoration-sky-300 dark:decoration-sky-500 underline-offset-4 hover:text-sky-900 dark:hover:text-sky-300" target="_blank">备用登录入口</a>。
                             导入配置文件属于临时登录；想长期使用同一账号，建议使用扫码登录。
                         </p>
                     </div>
-                    <span class="rounded-full border border-rose-200 bg-white px-3 py-1 text-xs font-medium text-rose-700">
+                    <span class="btb-badge-pink">
                         登录配置
                     </span>
                 </div>
@@ -505,7 +510,7 @@ def setting_tab():
                 elem_classes="!p-0",
             )
 
-            with gr.Row(elem_classes="!items-end !gap-3"):
+            with gr.Row(elem_classes="btb-action-row !items-end !gap-3"):
                 username_ui = gr.Text(
                     lambda: util.main_request.get_request_name(),
                     label="账号名称",
@@ -589,10 +594,10 @@ def setting_tab():
             qr_img = gr.Image(label="登录验证码", visible=False)
             check_btn = gr.Button("扫码后点击此按钮", visible=False)
 
-            with gr.Row(elem_classes="!items-center !gap-3 !flex-wrap"):
+            with gr.Row(elem_classes="btb-action-row !items-center !gap-3 !flex-wrap"):
                 login_btn = gr.Button(
                     "注销并生成二维码登录",
-                    elem_classes="!rounded-xl !border !border-slate-300 !bg-white !px-4 !text-slate-900 !shadow-sm hover:!bg-slate-100 !transition",
+                    elem_classes="!rounded-xl !border !border-slate-300 dark:border-slate-600 !px-4 !shadow-sm transition",
                 )
 
                 qrcode_key_state = gr.State("")
@@ -675,7 +680,7 @@ def setting_tab():
                 )
                 upload_ui = gr.UploadButton(
                     label="导入",
-                    elem_classes="!rounded-xl !border !border-slate-200 !bg-white !shadow-sm hover:!bg-slate-50",
+                    elem_classes="!rounded-xl !border !border-slate-200 dark:border-slate-700 !shadow-sm",
                 )
                 upload_ui.upload(upload_file, [upload_ui], [username_ui, gr_file_ui])
 
@@ -683,7 +688,7 @@ def setting_tab():
         with gr.Accordion(
             label="填写你的当前账号所绑定的手机号[可选]",
             open=False,
-            elem_classes="!rounded-2xl !border !border-slate-200 !bg-white !shadow-sm",
+            elem_classes="btb-card btb-card-compact",
         ):
             phone_gate_ui = gr.Textbox(
                 label="填写你的当前账号所绑定的手机号",
@@ -697,21 +702,38 @@ def setting_tab():
             phone_gate_ui.change(fn=input_phone, inputs=phone_gate_ui, outputs=None)
 
         # 抢票信息卡片
-        with gr.Column(
-            elem_classes="!gap-4 !rounded-2xl !border !border-slate-200 !bg-gradient-to-br !from-sky-50 !via-white !to-cyan-50 !p-5 !shadow-sm"
-        ):
+        with gr.Column(elem_classes="btb-card btb-card-sky btb-card-compact !gap-3"):
             gr.Markdown(
                 """
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p class="text-lg font-semibold text-slate-900">票务配置</p>
-                        <p class="mt-2 text-sm leading-6 text-slate-600">
+                        <p class="text-lg font-semibold text-slate-900 dark:text-slate-100">票务配置</p>
+                        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">
                             输入活动链接后获取票档信息，再完成购票人、地址和联系人配置。
                         </p>
                     </div>
-                    <span style="font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif;" class="rounded-full border border-sky-200 bg-white px-3 py-1 text-xs font-medium text-sky-700">
+                    <span class="btb-badge-blue">
                         生成配置
                     </span>
+                </div>
+                """,
+                elem_classes="!p-0",
+            )
+            gr.Markdown(
+                """
+                <div class="btb-inline-list !mt-0">
+                    <div class="btb-inline-item">
+                        <strong>1. 鑾峰彇椤圭洰</strong>
+                        <span>鍏堣緭鍏ユ椿鍔ㄩ摼鎺ユ垨 ID锛岃嚜鍔ㄥ姞杞界エ妗ｄ俊鎭?/span>
+                    </div>
+                    <div class="btb-inline-item">
+                        <strong>2. 琛ュ叏蹇呭～椤?</strong>
+                        <span>閫夌エ銆佽仈绯讳汉銆佸湴鍧€鍜屽疄鍚嶄汉涓€娆℃€у～濂?/span>
+                    </div>
+                    <div class="btb-inline-item">
+                        <strong>3. 鐢熸垚 JSON</strong>
+                        <span>涓嬫柟浼氱洿鎺ユ樉绀洪厤缃拰鏂囦欢杈撳嚭</span>
+                    </div>
                 </div>
                 """,
                 elem_classes="!p-0",
@@ -720,7 +742,7 @@ def setting_tab():
                 label="配置票的信息",
                 visible=False,
             )
-            with gr.Row(elem_classes="!items-end !gap-3"):
+            with gr.Row(elem_classes="btb-action-row !items-end !gap-3"):
                 ticket_id_ui = gr.Textbox(
                     label="想要抢票的网址",
                     interactive=True,
@@ -736,9 +758,9 @@ def setting_tab():
             with gr.Column(
                 visible=False,
                 elem_id="ticket-detail",
-                elem_classes="!gap-4 !rounded-2xl !border !border-slate-200 !bg-white/80 !p-4",
+                elem_classes="btb-soft-panel btb-tight-form !gap-3",
             ) as inner:
-                with gr.Row(elem_classes="!gap-3 !items-end"):
+                with gr.Row(elem_classes="btb-action-row !gap-3 !items-end !flex-wrap"):
                     ticket_info_ui = gr.Dropdown(
                         label="选票",
                         interactive=True,
@@ -752,7 +774,7 @@ def setting_tab():
                         interactive=True,
                     )
 
-                with gr.Row(elem_classes="!gap-3 !items-end"):
+                with gr.Row(elem_classes="btb-action-row !gap-3 !items-end !flex-wrap"):
                     people_buyer_name = gr.Textbox(
                         value=lambda: ConfigDB.get("people_buyer_name") or "",
                         label="联系人姓名",
@@ -878,3 +900,447 @@ def setting_tab():
                 inputs=data_ui,
                 outputs=[data_ui, ticket_info_ui, info_ui],
             )
+
+
+def setting_tab_v2(go_handles=None, tabs=None):
+    def _is_logged_in(name: str | None) -> bool:
+        text = (name or "").strip().lower()
+        return text not in {"", "not login", "未登录"}
+
+    with gr.Column(elem_classes="btb-plain-page !gap-3"):
+        with gr.Column(elem_classes="btb-pane !gap-3"):
+            gr.Markdown("### 账号", elem_classes="!p-0")
+
+            with gr.Row(equal_height=True, elem_classes="btb-action-row !items-end !gap-3 !flex-wrap"):
+                username_ui = gr.Text(
+                    lambda: util.main_request.get_request_name(),
+                    label="当前账号",
+                    interactive=False,
+                    scale=4,
+                )
+                gr_file_ui = gr.File(
+                    label="登录文件",
+                    value=lambda: GLOBAL_COOKIE_PATH,
+                    scale=2,
+                )
+
+            def generate_qrcode():
+                headers = {
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0",
+                }
+                max_retry = 10
+                for _ in range(max_retry):
+                    res = requests.request(
+                        "GET",
+                        "https://passport.bilibili.com/x/passport-login/web/qrcode/generate",
+                        headers=headers,
+                    )
+                    res_json = res.json()
+                    if res_json["code"] == 0:
+                        break
+                    time.sleep(1)
+                else:
+                    return None, "二维码生成失败"
+
+                url = res_json["data"]["url"]
+                qrcode_key = res_json["data"]["qrcode_key"]
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_H,  # type: ignore
+                    box_size=10,
+                    border=4,
+                )
+                qr.add_data(url)
+                qr.make(fit=True)
+                path = os.path.join(TEMP_PATH, "login_qrcode.png")
+                qr.make_image(fill_color="black", back_color="white").get_image().save(
+                    path
+                )
+                return path, qrcode_key
+
+            def poll_login(qrcode_key):
+                headers = {"User-Agent": "Mozilla/5.0"}
+                for _ in range(120):
+                    res = requests.request(
+                        "GET",
+                        "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
+                        params={"qrcode_key": qrcode_key},
+                        headers=headers,
+                        timeout=5,
+                    )
+                    poll_res = res.json()
+                    if poll_res.get("code") == 0:
+                        code = poll_res["data"]["code"]
+                        if code == 0:
+                            cookies = parse_cookie_list(res.headers["set-cookie"])
+                            return "登录成功", cookies
+                        if code in (86101, 86090):
+                            time.sleep(0.5)
+                            continue
+                        return f"扫码失败：{poll_res['data']['message']}", None
+                    time.sleep(0.5)
+                return "登录超时，请重试。", None
+
+            def start_login():
+                img_path, qrcode_key = generate_qrcode()
+                if not img_path:
+                    return None, "二维码生成失败"
+                return img_path, qrcode_key
+
+            qr_img = gr.Image(label="登录二维码", visible=False)
+            check_btn = gr.Button("检查登录状态", visible=False)
+
+            with gr.Row(elem_classes="btb-action-row !items-center !gap-3 !flex-wrap"):
+                login_btn = gr.Button("扫码登录")
+                upload_ui = gr.UploadButton(label="导入登录文件")
+
+            qrcode_key_state = gr.State("")
+
+            with gr.Row(elem_classes="!gap-3 !flex-wrap"):
+                status_note = gr.Markdown(
+                    ""
+                    if _is_logged_in(util.main_request.get_request_name())
+                    else '<p class="btb-muted">登录成功后显示项目与配置</p>',
+                    elem_classes="!p-0",
+                )
+
+            def on_login_click():
+                util.main_request.cookieManager.db.delete("cookie")
+                gr.Info("已经注销，请重新登录", duration=5)
+                img_path, msg_or_key = start_login()
+                if img_path:
+                    return [
+                        gr.update(value=img_path, visible=True),
+                        gr.update(value="未登录"),
+                        gr.update(value=GLOBAL_COOKIE_PATH),
+                        msg_or_key,
+                        gr.update(visible=False),
+                        gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                    ]
+                gr.Warning("生成二维码异常", duration=5)
+                return [
+                    gr.update(value="", visible=False),
+                    gr.update(value="未登录"),
+                    gr.update(value=GLOBAL_COOKIE_PATH),
+                    "",
+                    gr.update(visible=False),
+                    gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                ]
+
+            def on_check_login(key):
+                if not key:
+                    return [
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    ]
+                msg, cookies = poll_login(key)
+                if cookies:
+                    try:
+                        set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
+                        util.main_request.cookieManager.db.insert("cookie", cookies)
+                        name = util.main_request.get_request_name()
+                        visible = _is_logged_in(name)
+                        if visible:
+                            gr.Info("登录成功", duration=5)
+                        return [
+                            gr.update(value=name),
+                            gr.update(value=GLOBAL_COOKIE_PATH),
+                            gr.update(visible=False),
+                            gr.update(visible=False),
+                            gr.update(visible=visible),
+                            gr.update(value=""),
+                        ]
+                    except Exception:
+                        pass
+
+                name = util.main_request.get_request_name()
+                gr.Warning(f"登录出现错误 {msg}", duration=5)
+                return [
+                    gr.update(value=name),
+                    gr.update(value=GLOBAL_COOKIE_PATH),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(visible=False),
+                    gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                ]
+
+            def on_upload_for_v2(filepath):
+                update_batches = list(upload_file(filepath))
+                if not update_batches:
+                    raise gr.Error("导入登录文件失败", duration=5)
+
+                updates = update_batches[0]
+                if not isinstance(updates, list) or len(updates) < 2:
+                    raise gr.Error("导入登录文件返回结果异常", duration=5)
+
+                first_update = updates[0]
+                name = (
+                    first_update.get("value")
+                    if isinstance(first_update, dict)
+                    else util.main_request.get_request_name()
+                )
+                visible = _is_logged_in(name)
+                return [
+                    updates[0],
+                    updates[1],
+                    gr.update(visible=visible),
+                    gr.update(value="" if visible else '<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                ]
+
+        with gr.Column(
+            visible=_is_logged_in(util.main_request.get_request_name()),
+            elem_classes="!gap-3",
+        ) as project_wrap:
+                with gr.Column(elem_classes="btb-pane !gap-3"):
+                    gr.Markdown(
+                        """
+                        <div>
+                            <p class="btb-section-title">项目与配置</p>
+                        </div>
+                        """,
+                        elem_classes="!p-0",
+                    )
+
+                    with gr.Column(elem_classes="btb-pane-sub !gap-2"):
+                        gr.Markdown(
+                            """
+                            <div>
+                                <p class="btb-section-title">项目入口</p>
+                                <p class="btb-section-desc">支持活动详情链接，也支持直接输入项目 ID。</p>
+                            </div>
+                            """,
+                            elem_classes="!p-0",
+                        )
+                        ticket_id_ui = gr.Textbox(
+                            label="活动链接 / 项目 ID",
+                            interactive=True,
+                            info="例如 https://show.bilibili.com/platform/detail.html?id=84096",
+                        )
+                        with gr.Row(elem_classes="btb-action-row !gap-3"):
+                            ticket_id_btn = gr.Button(
+                                "获取票务信息",
+                                elem_classes="!rounded-xl !border !border-slate-300 !px-4",
+                            )
+
+                    with gr.Column(
+                        visible=False,
+                        elem_id="ticket-detail-v2",
+                        elem_classes="btb-pane-sub btb-tight-form !gap-3",
+                    ) as inner:
+                        info_ui = gr.HTML(label="票务摘要", visible=False)
+
+                        with gr.Row(equal_height=True, elem_classes="!gap-3 !flex-wrap"):
+                            people_buyer_name = gr.Textbox(
+                                value=lambda: ConfigDB.get("people_buyer_name") or "",
+                                label="联系人姓名",
+                                placeholder="请输入姓名",
+                                interactive=True,
+                                info="必填",
+                                scale=2,
+                            )
+                            people_buyer_phone = gr.Textbox(
+                                value=lambda: ConfigDB.get("people_buyer_phone") or "",
+                                label="联系人电话",
+                                placeholder="请输入电话",
+                                interactive=True,
+                                info="必填",
+                                scale=2,
+                            )
+                            address_ui = gr.Dropdown(
+                                label="收货地址",
+                                interactive=True,
+                                type="index",
+                                info="必填，如果为空请先去地址管理中添加",
+                                scale=3,
+                            )
+
+                        with gr.Row(equal_height=True, elem_classes="!gap-3 !flex-wrap"):
+                            ticket_info_ui = gr.Dropdown(
+                                label="票档",
+                                interactive=True,
+                                type="index",
+                                info="必填",
+                                scale=10,
+                            )
+                            data_ui = gr.Textbox(visible=False)
+
+                        people_ui = gr.CheckboxGroup(
+                            label="实名购票人",
+                            interactive=True,
+                            type="index",
+                            info="必填，勾选几位就代表购买几张票",
+                            visible=False,
+                        )
+
+                        def get_people_limit_text(ticket_index):
+                            if ticket_index is None:
+                                return "必填，请先选择票档"
+
+                            try:
+                                ticket_cur = ticket_value[ticket_index]
+                            except (IndexError, TypeError):
+                                return "必填，请先选择票档"
+
+                            ticket_limit = _read_positive_int(
+                                (ticket_cur["ticket"].get("static_limit") or {}).get("num")
+                            )
+                            if ticket_limit is None:
+                                return "必填，勾选几位就代表购买几张票"
+                            return f"必填，当前票档最多可选 {ticket_limit} 人"
+
+                        def show_people_selector_for_ticket(ticket_index):
+                            return gr.update(
+                                visible=ticket_index is not None,
+                                info=get_people_limit_text(ticket_index),
+                            )
+
+                        with gr.Row(elem_classes="btb-action-row !items-center !gap-3 !flex-wrap"):
+                            config_btn = gr.Button(
+                                "生成配置去抢票" if go_handles else "生成配置"
+                            )
+
+                        config_file_ui = gr.File(label="配置文件", visible=False)
+                        config_output_ui = gr.JSON(label="配置 JSON 预览", visible=False)
+
+                        if go_handles:
+                            def on_submit_all_and_go(
+                                ticket_id,
+                                ticket_info,
+                                people_indices,
+                                buyer_name,
+                                buyer_phone,
+                                address_index,
+                            ):
+                                from tab.go import autofill_time_from_files
+
+                                batches = list(
+                                    on_submit_all(
+                                        ticket_id,
+                                        ticket_info,
+                                        people_indices,
+                                        buyer_name,
+                                        buyer_phone,
+                                        address_index,
+                                    )
+                                )
+                                if not batches:
+                                    return [
+                                        gr.update(),
+                                        gr.update(),
+                                        gr.update(),
+                                        gr.update(),
+                                        gr.update(),
+                                        gr.update(),
+                                    ]
+
+                                updates = batches[0]
+                                config_file_update = updates[1]
+                                config_path = (
+                                    config_file_update.get("value")
+                                    if isinstance(config_file_update, dict)
+                                    else None
+                                )
+                                if not config_path:
+                                    raise gr.Error("未生成配置文件", duration=5)
+
+                                with open(config_path, "r", encoding="utf-8") as file:
+                                    content = file.read()
+                                auto_time = autofill_time_from_files([config_path])
+
+                                return [
+                                    updates[0],
+                                    updates[1],
+                                    gr.update(value=[config_path]),
+                                    gr.update(value=content, visible=True),
+                                    gr.update(value=auto_time),
+                                    gr.update(selected="go") if tabs else gr.update(),
+                                ]
+
+                            config_btn.click(
+                                fn=on_submit_all_and_go,
+                                inputs=[
+                                    ticket_id_ui,
+                                    ticket_info_ui,
+                                    people_ui,
+                                    people_buyer_name,
+                                    people_buyer_phone,
+                                    address_ui,
+                                ],
+                                outputs=[
+                                    config_output_ui,
+                                    config_file_ui,
+                                    go_handles["upload_ui"],
+                                    go_handles["ticket_ui"],
+                                    go_handles["auto_time_ui"],
+                                    tabs,
+                                ],
+                            )
+                        else:
+                            config_btn.click(
+                                fn=on_submit_all,
+                                inputs=[
+                                    ticket_id_ui,
+                                    ticket_info_ui,
+                                    people_ui,
+                                    people_buyer_name,
+                                    people_buyer_phone,
+                                    address_ui,
+                                ],
+                                outputs=[config_output_ui, config_file_ui],
+                            )
+
+                    def on_submit_ticket_id_v2(ticket_input):
+                        for updates in on_submit_ticket_id(ticket_input):
+                            updates[5] = gr.update(value="", visible=False)
+                            updates[1] = gr.update(
+                                **updates[1],
+                                visible=False,
+                                value=[],
+                                info=get_people_limit_text(None),
+                            )
+                            yield updates
+
+                    ticket_id_btn.click(
+                        fn=on_submit_ticket_id_v2,
+                        inputs=ticket_id_ui,
+                        outputs=[
+                            ticket_info_ui,
+                            people_ui,
+                            address_ui,
+                            inner,
+                            info_ui,
+                            data_ui,
+                        ],
+                    )
+
+                    ticket_info_ui.change(
+                        fn=show_people_selector_for_ticket,
+                        inputs=ticket_info_ui,
+                        outputs=people_ui,
+                    )
+
+        login_btn.click(
+            on_login_click,
+            outputs=[qr_img, username_ui, gr_file_ui, qrcode_key_state, project_wrap, status_note],
+        )
+
+        @gr.on(qrcode_key_state.change, inputs=qrcode_key_state, outputs=check_btn)
+        def qrcode_key_state_change(key):
+            if key:
+                return gr.update(visible=True)
+
+        check_btn.click(
+            on_check_login,
+            inputs=[qrcode_key_state],
+            outputs=[username_ui, gr_file_ui, qr_img, check_btn, project_wrap, status_note],
+        )
+
+        upload_ui.upload(
+            on_upload_for_v2,
+            [upload_ui],
+            [username_ui, gr_file_ui, project_wrap, status_note],
+        )

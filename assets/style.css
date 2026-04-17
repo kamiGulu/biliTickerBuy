@@ -1,0 +1,315 @@
+/* Bilibili Inspired Design System - Pure CSS (Compatible with Gradio Dark Mode) */
+:root {
+  --bili-pink: #FB7299;
+  --bili-blue: #00A1D6;
+}
+
+/* Card Base */
+.btb-card {
+  border-radius: 0.75rem !important;
+  border: 1px solid #dbe1ea !important;
+  padding: 0.875rem !important;
+  box-shadow: none !important;
+  transition: none !important;
+  background: #ffffff !important;
+}
+
+.dark .btb-card {
+  border-color: #334155 !important;
+  background: #0f172a !important;
+  box-shadow: none !important;
+}
+
+/* Amber Card */
+.btb-card-amber {
+  background: #ffffff !important;
+}
+.dark .btb-card-amber {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+/* Rose Card */
+.btb-card-rose {
+  background: #ffffff !important;
+}
+.dark .btb-card-rose {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+/* Sky Card */
+.btb-card-sky {
+  background: #ffffff !important;
+}
+.dark .btb-card-sky {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+/* Badges */
+.btb-badge-pink, .btb-badge-blue, .btb-badge-amber {
+  display: none !important;
+}
+
+/* Force correct colors for common elements */
+.dark .text-slate-900 { color: #f1f5f9 !important; }
+.dark .text-slate-800 { color: #e2e8f0 !important; }
+.dark .text-slate-700 { color: #cbd5e1 !important; }
+.dark .text-slate-600 { color: #94a3b8 !important; }
+.dark .bg-white { background-color: #1e293b !important; }
+
+/* DateTime Input Styling */
+input[type="datetime-local"] {
+  color-scheme: light;
+}
+.dark input[type="datetime-local"] {
+  color-scheme: dark;
+  background-color: #1e293b !important;
+  color: #f1f5f9 !important;
+  border-color: #334155 !important;
+}
+
+/* Gradio Accordion & Container Fixes */
+.dark .gr-accordion {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+
+/* Compact Settings Page */
+.btb-compact-page {
+  gap: 0.875rem !important;
+}
+
+.btb-card-compact {
+  border-radius: 0.875rem !important;
+  padding: 0.875rem !important;
+}
+
+.btb-soft-panel {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.75rem !important;
+  background: #ffffff !important;
+  padding: 0.75rem !important;
+}
+
+.dark .btb-soft-panel {
+  border-color: #334155 !important;
+  background: #111827 !important;
+}
+
+.btb-section-title {
+  margin: 0 !important;
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.dark .btb-section-title {
+  color: #f8fafc !important;
+}
+
+.btb-section-desc {
+  margin: 0.2rem 0 0 0 !important;
+  font-size: 0.74rem !important;
+  line-height: 1.35 !important;
+  color: #64748b !important;
+}
+
+.dark .btb-section-desc {
+  color: #94a3b8 !important;
+}
+
+.btb-inline-list {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+  gap: 0.5rem !important;
+  margin-top: 0.5rem !important;
+}
+
+.btb-inline-item {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.5rem !important;
+  background: #fafafa !important;
+  padding: 0.5rem 0.625rem !important;
+}
+
+.dark .btb-inline-item {
+  border-color: #334155 !important;
+  background: #111827 !important;
+}
+
+.btb-inline-item strong {
+  display: block !important;
+  margin-bottom: 0.15rem !important;
+  font-size: 0.8rem !important;
+  color: #0f172a !important;
+}
+
+.dark .btb-inline-item strong {
+  color: #e2e8f0 !important;
+}
+
+.btb-inline-item span {
+  font-size: 0.75rem !important;
+  line-height: 1.35 !important;
+  color: #64748b !important;
+}
+
+.dark .btb-inline-item span {
+  color: #94a3b8 !important;
+}
+
+.btb-action-row {
+  gap: 0.625rem !important;
+  align-items: end !important;
+}
+
+.btb-tight-form {
+  gap: 0.75rem !important;
+}
+
+#ticket-detail {
+  gap: 0.75rem !important;
+}
+
+.btb-toolbar {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 0.75rem !important;
+}
+
+.btb-ticket-info {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.75rem !important;
+  background: #ffffff !important;
+  padding: 0.75rem !important;
+}
+
+.dark .btb-ticket-info {
+  border-color: #334155 !important;
+  background: #111827 !important;
+}
+
+.btb-ticket-title {
+  margin: 0 !important;
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.dark .btb-ticket-title {
+  color: #f8fafc !important;
+}
+
+.btb-ticket-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important;
+  gap: 0.5rem !important;
+  margin-top: 0.5rem !important;
+}
+
+.btb-stat {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.5rem !important;
+  background: #fafafa !important;
+  padding: 0.5rem 0.625rem !important;
+}
+
+.dark .btb-stat {
+  border-color: #334155 !important;
+  background: #0f172a !important;
+}
+
+.btb-stat-label {
+  margin: 0 !important;
+  font-size: 0.72rem !important;
+  line-height: 1.2 !important;
+  color: #64748b !important;
+}
+
+.dark .btb-stat-label {
+  color: #94a3b8 !important;
+}
+
+.btb-stat-value {
+  margin: 0.2rem 0 0 0 !important;
+  font-size: 0.83rem !important;
+  line-height: 1.35 !important;
+  color: #0f172a !important;
+  word-break: break-all !important;
+}
+
+.dark .btb-stat-value {
+  color: #e2e8f0 !important;
+}
+
+.btb-ticket-hint {
+  margin: 0.5rem 0 0 0 !important;
+  font-size: 0.72rem !important;
+  line-height: 1.4 !important;
+  color: #64748b !important;
+}
+
+.dark .btb-ticket-hint {
+  color: #94a3b8 !important;
+}
+
+.btb-plain-page {
+  gap: 0.75rem !important;
+}
+
+.btb-page-head {
+  margin: 0 !important;
+}
+
+.btb-page-head h2 {
+  margin: 0 !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.dark .btb-page-head h2 {
+  color: #f8fafc !important;
+}
+
+.btb-page-head p,
+.btb-muted {
+  margin: 0.2rem 0 0 0 !important;
+  font-size: 0.74rem !important;
+  line-height: 1.35 !important;
+  color: #64748b !important;
+}
+
+.dark .btb-page-head p,
+.dark .btb-muted {
+  color: #94a3b8 !important;
+}
+
+.btb-pane {
+  border: 1px solid #dbe1ea !important;
+  border-radius: 0.75rem !important;
+  background: #ffffff !important;
+  padding: 0.875rem !important;
+  box-shadow: none !important;
+}
+
+.dark .btb-pane {
+  border-color: #334155 !important;
+  background: #0f172a !important;
+}
+
+.btb-pane-sub {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0.625rem !important;
+  background: #f8fafc !important;
+  padding: 0.75rem !important;
+}
+
+.dark .btb-pane-sub {
+  border-color: #334155 !important;
+  background: #111827 !important;
+}
