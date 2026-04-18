@@ -12,6 +12,8 @@ from task.buy import buy_new_terminal
 import util
 from util import ConfigDB, Endpoint, GlobalStatusInstance, time_service
 
+GO_DRAFT_KEY = "ui_go_draft_v2"
+
 
 def withTimeString(string):
     return f"{datetime.datetime.now()}: {string}"
@@ -70,6 +72,22 @@ def _read_first_config_text(files) -> str:
             return file.read()
     except Exception as e:
         return str(e)
+
+
+def _load_go_draft() -> dict:
+    draft = ConfigDB.get(GO_DRAFT_KEY)
+    return draft if isinstance(draft, dict) else {}
+
+
+def _normalize_existing_files(files) -> list[str]:
+    return [path for path in (files or []) if isinstance(path, str) and os.path.exists(path)]
+
+
+def _save_go_draft_patch(**kwargs):
+    draft = _load_go_draft()
+    draft.update(kwargs)
+    ConfigDB.insert(GO_DRAFT_KEY, draft)
+    return draft
 
 
 def autofill_time_from_files(files):
@@ -137,6 +155,7 @@ def autofill_time_from_files(files):
 
 def go_tab(demo: gr.Blocks):
     with gr.Column(elem_classes="btb-plain-page !gap-3"):
+        go_draft_state = gr.State({})
         with gr.Column(elem_classes="btb-pane !gap-3"):
             gr.Markdown("### 操作抢票", elem_classes="!p-0")
             with gr.Column(elem_classes="btb-pane-sub !gap-3"):
@@ -173,6 +192,27 @@ def go_tab(demo: gr.Blocks):
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
                             >
                         </label>
+                        <script>
+                        (() => {
+                            const key = "btb_go_time_start";
+                            const init = () => {
+                                const input = document.getElementById("datetime");
+                                if (!input || input.dataset.btbBound === "1") {
+                                    return;
+                                }
+                                input.dataset.btbBound = "1";
+                                const saved = window.localStorage.getItem(key);
+                                if (saved && !input.value) {
+                                    input.value = saved;
+                                }
+                                input.addEventListener("input", () => {
+                                    window.localStorage.setItem(key, input.value || "");
+                                });
+                            };
+                            setTimeout(init, 0);
+                            setTimeout(init, 300);
+                        })();
+                        </script>
                         """,
                         label="抢票开始时间",
                     )
@@ -183,20 +223,33 @@ def go_tab(demo: gr.Blocks):
                 )
 
         def upload(filepath):
-            return gr.update(value=_read_first_config_text(filepath), visible=bool(filepath))
+            content = _read_first_config_text(filepath)
+            _save_go_draft_patch(
+                files=_normalize_existing_files(filepath),
+                ticket_preview=content,
+            )
+            return gr.update(value=content, visible=bool(filepath))
 
         def file_select_handler(select_data: SelectData, files):
             file_label = files[select_data.index]
             try:
                 with open(file_label, "r", encoding="utf-8") as file:
                     content = file.read()
+                _save_go_draft_patch(
+                    files=_normalize_existing_files(files),
+                    ticket_preview=content,
+                )
                 return content
             except Exception as e:
                 return str(e)
 
+        def clear_upload(_):
+            _save_go_draft_patch(files=[], ticket_preview="")
+            return gr.update("", visible=False)
+
         upload_ui.upload(fn=upload, inputs=upload_ui, outputs=ticket_ui)
         upload_ui.clear(
-            fn=lambda x: gr.update("", visible=False),
+            fn=clear_upload,
             inputs=upload_ui,
             outputs=ticket_ui,
         )
@@ -204,7 +257,13 @@ def go_tab(demo: gr.Blocks):
         upload_ui.select(file_select_handler, upload_ui, ticket_ui)
 
         def auto_fill_time(files):
-            return autofill_time_from_files(files)
+            value = autofill_time_from_files(files)
+            _save_go_draft_patch(
+                files=_normalize_existing_files(files),
+                ticket_preview=_read_first_config_text(files),
+                time_start=value or "",
+            )
+            return value
 
         with gr.Accordion(
             label="高级设置",
@@ -523,7 +582,11 @@ def go_tab(demo: gr.Blocks):
             ):
                 show_random_message_ui = gr.Checkbox(
                     label="关闭群友语录",
-                    value=True,
+                    value=(
+                        ConfigDB.get("go_hide_random_message")
+                        if ConfigDB.get("go_hide_random_message") is not None
+                        else True
+                    ),
                     info="关闭后，抢票失败时将不再显示有趣的语录",
                 )
 
@@ -532,7 +595,7 @@ def go_tab(demo: gr.Blocks):
         ):
             interval_ui = gr.Number(
                 label="抢票间隔",
-                value=300,
+                value=(ConfigDB.get("go_interval") or 300),
                 minimum=1,
                 info="设置抢票请求之间的时间间隔（单位：毫秒），建议不要设置太小",
             )
@@ -542,11 +605,21 @@ def go_tab(demo: gr.Blocks):
             terminal_ui = gr.Radio(
                 label="日志显示方式",
                 choices=choices,
-                value=choices[0],
+                value=(ConfigDB.get("go_terminal") or choices[0]),
                 info="日志显示的方式,非windows用戶只支持網頁",
                 type="value",
                 interactive=True,
             )
+
+    def save_go_preferences(interval, terminal, hide_random_message):
+        ConfigDB.insert("go_interval", interval)
+        ConfigDB.insert("go_terminal", terminal)
+        ConfigDB.insert("go_hide_random_message", hide_random_message)
+        return _save_go_draft_patch(
+            interval=interval,
+            terminal=terminal,
+            hide_random_message=hide_random_message,
+        )
 
     def try_assign_endpoint(endpoint_url, payload):
         try:
@@ -578,6 +651,14 @@ def go_tab(demo: gr.Blocks):
         terminal_ui,
         hide_random_message,
     ):
+        _save_go_draft_patch(
+            files=_normalize_existing_files(files),
+            ticket_preview=_read_first_config_text(files),
+            time_start=time_start or "",
+            interval=interval,
+            terminal=terminal_ui,
+            hide_random_message=hide_random_message,
+        )
         if not files:
             return [gr.update(value=withTimeString("未提交抢票配置"), visible=True)]
         yield [
@@ -648,6 +729,30 @@ def go_tab(demo: gr.Blocks):
 
     _time_tmp = gr.Textbox(visible=False)
     _auto_fill_time_tmp = gr.Textbox(visible=False)
+
+    def restore_go_draft():
+        draft = _load_go_draft()
+        files = _normalize_existing_files(draft.get("files"))
+        ticket_preview = draft.get("ticket_preview") or _read_first_config_text(files)
+        interval = draft.get("interval")
+        terminal = draft.get("terminal") or ConfigDB.get("go_terminal")
+        hide_random_message = draft.get("hide_random_message")
+        saved_hide_random_message = ConfigDB.get("go_hide_random_message")
+        time_start = draft.get("time_start") or ""
+
+        return [
+            gr.update(value=files),
+            gr.update(value=ticket_preview, visible=bool(ticket_preview)),
+            gr.update(value=interval if isinstance(interval, (int, float)) else (ConfigDB.get("go_interval") or 300)),
+            gr.update(value=terminal),
+            gr.update(
+                value=hide_random_message
+                if isinstance(hide_random_message, bool)
+                else (saved_hide_random_message if saved_hide_random_message is not None else True)
+            ),
+            gr.update(value=time_start),
+        ]
+
     auto_fill_time_btn.click(
         fn=auto_fill_time,
         inputs=upload_ui,
@@ -657,7 +762,7 @@ def go_tab(demo: gr.Blocks):
         fn=None,
         inputs=None,
         outputs=_time_tmp,
-        js='(x) => document.getElementById("datetime").value',
+        js='(x) => { const value = document.getElementById("datetime").value; window.localStorage.setItem("btb_go_time_start", value || ""); return value; }',
     )
     _report_tmp = gr.Button(visible=False)
     _report_tmp.api_info
@@ -718,10 +823,40 @@ def go_tab(demo: gr.Blocks):
             const input = document.getElementById("datetime");
             if (input) {
                 input.value = value || "";
+                window.localStorage.setItem("btb_go_time_start", value || "");
             }
             return value || "";
         }
         """,
+    )
+
+    interval_ui.change(
+        fn=save_go_preferences,
+        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        outputs=go_draft_state,
+    )
+    terminal_ui.change(
+        fn=save_go_preferences,
+        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        outputs=go_draft_state,
+    )
+    show_random_message_ui.change(
+        fn=save_go_preferences,
+        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        outputs=go_draft_state,
+    )
+
+    demo.load(
+        fn=restore_go_draft,
+        inputs=None,
+        outputs=[
+            upload_ui,
+            ticket_ui,
+            interval_ui,
+            terminal_ui,
+            show_random_message_ui,
+            _auto_fill_time_tmp,
+        ],
     )
 
     return {

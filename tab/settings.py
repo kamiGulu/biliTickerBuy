@@ -26,6 +26,48 @@ ticket_str_list: List[str] = []
 sales_dates = []
 project_id = 0
 is_hot_project = False
+SETTINGS_DRAFT_KEY = "ui_settings_draft_v3"
+SETTINGS_DRAFT_ALLOWED_KEYS = {
+    "ticket_id",
+    "people_buyer_name",
+    "people_buyer_phone",
+}
+
+
+def _load_settings_draft() -> dict[str, Any]:
+    draft = ConfigDB.get(SETTINGS_DRAFT_KEY)
+    if not isinstance(draft, dict):
+        return {}
+    return {
+        key: value for key, value in draft.items() if key in SETTINGS_DRAFT_ALLOWED_KEYS
+    }
+
+
+def _save_settings_draft_patch(**kwargs):
+    draft = _load_settings_draft()
+    draft.update(
+        {
+            key: value
+            for key, value in kwargs.items()
+            if key in SETTINGS_DRAFT_ALLOWED_KEYS
+        }
+    )
+    ConfigDB.insert(SETTINGS_DRAFT_KEY, draft)
+    return draft
+
+
+def _clear_settings_draft():
+    if ConfigDB.contains(SETTINGS_DRAFT_KEY):
+        ConfigDB.delete(SETTINGS_DRAFT_KEY)
+    if ConfigDB.contains("people_buyer_name"):
+        ConfigDB.delete("people_buyer_name")
+    if ConfigDB.contains("people_buyer_phone"):
+        ConfigDB.delete("people_buyer_phone")
+
+
+def _clear_go_draft():
+    if ConfigDB.contains("ui_go_draft_v2"):
+        ConfigDB.delete("ui_go_draft_v2")
 
 
 def _read_positive_int(value) -> int | None:
@@ -441,12 +483,18 @@ def on_submit_all(
 
 def upload_file(filepath):
     try:
-        set_main_request(BiliRequest(cookies_config_path=filepath))
+        with open(filepath, "r", encoding="utf-8") as src:
+            cookie_payload = json.load(src)
+        with open(GLOBAL_COOKIE_PATH, "w", encoding="utf-8") as dst:
+            json.dump(cookie_payload, dst, ensure_ascii=False, indent=4)
+
+        ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
+        set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
         name = util.main_request.get_request_name()
         gr.Info("导入成功", duration=5)
         yield [
             gr.update(value=name),
-            gr.update(value=ConfigDB.get("cookies_path")),
+            gr.update(value=GLOBAL_COOKIE_PATH),
         ]
     except Exception as e:
         name = util.main_request.get_request_name()
@@ -902,7 +950,7 @@ def setting_tab():
             )
 
 
-def setting_tab_v2(go_handles=None, tabs=None):
+def setting_tab_v2(go_handles=None, tabs=None, demo=None):
     def _is_logged_in(name: str | None) -> bool:
         text = (name or "").strip().lower()
         return text not in {"", "not login", "未登录"}
@@ -920,7 +968,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                 )
                 gr_file_ui = gr.File(
                     label="登录文件",
-                    value=lambda: GLOBAL_COOKIE_PATH,
+                    value=lambda: ConfigDB.get("cookies_path") or GLOBAL_COOKIE_PATH,
                     scale=2,
                 )
 
@@ -1003,6 +1051,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                     else '<p class="btb-muted">登录成功后显示项目与配置</p>',
                     elem_classes="!p-0",
                 )
+            settings_draft_state = gr.State({})
 
             def on_login_click():
                 util.main_request.cookieManager.db.delete("cookie")
@@ -1040,6 +1089,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                 msg, cookies = poll_login(key)
                 if cookies:
                     try:
+                        ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
                         set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
                         util.main_request.cookieManager.db.insert("cookie", cookies)
                         name = util.main_request.get_request_name()
@@ -1061,7 +1111,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                 gr.Warning(f"登录出现错误 {msg}", duration=5)
                 return [
                     gr.update(value=name),
-                    gr.update(value=GLOBAL_COOKIE_PATH),
+                    gr.update(value=ConfigDB.get("cookies_path") or GLOBAL_COOKIE_PATH),
                     gr.update(),
                     gr.update(),
                     gr.update(visible=False),
@@ -1091,6 +1141,37 @@ def setting_tab_v2(go_handles=None, tabs=None):
                     gr.update(value="" if visible else '<p class="btb-muted">登录成功后显示项目与配置</p>'),
                 ]
 
+            def restore_login_session():
+                cookies_path = ConfigDB.get("cookies_path") or GLOBAL_COOKIE_PATH
+                if not cookies_path or not os.path.exists(cookies_path):
+                    return [
+                        gr.update(value="未登录"),
+                        gr.update(value=GLOBAL_COOKIE_PATH),
+                        gr.update(visible=False),
+                        gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                    ]
+
+                try:
+                    set_main_request(BiliRequest(cookies_config_path=cookies_path))
+                    name = util.main_request.get_request_name()
+                    visible = _is_logged_in(name)
+                    if visible:
+                        return [
+                            gr.update(value=name),
+                            gr.update(value=cookies_path),
+                            gr.update(visible=True),
+                            gr.update(value=""),
+                        ]
+                except Exception:
+                    pass
+
+                return [
+                    gr.update(value="未登录"),
+                    gr.update(value=cookies_path),
+                    gr.update(visible=False),
+                    gr.update(value='<p class="btb-muted">登录文件已恢复，但登录状态可能已过期，请重新登录</p>'),
+                ]
+
         with gr.Column(
             visible=_is_logged_in(util.main_request.get_request_name()),
             elem_classes="!gap-3",
@@ -1116,6 +1197,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                             elem_classes="!p-0",
                         )
                         ticket_id_ui = gr.Textbox(
+                            value=lambda: _load_settings_draft().get("ticket_id", ""),
                             label="活动链接 / 项目 ID",
                             interactive=True,
                             info="例如 https://show.bilibili.com/platform/detail.html?id=84096",
@@ -1206,6 +1288,49 @@ def setting_tab_v2(go_handles=None, tabs=None):
                         config_file_ui = gr.File(label="配置文件", visible=False)
                         config_output_ui = gr.JSON(label="配置 JSON 预览", visible=False)
 
+                        def save_settings_form(
+                            ticket_id,
+                            buyer_name,
+                            buyer_phone,
+                        ):
+                            return _save_settings_draft_patch(
+                                ticket_id=ticket_id or "",
+                                people_buyer_name=buyer_name or "",
+                                people_buyer_phone=buyer_phone or "",
+                            )
+
+                        def on_submit_all_with_draft(
+                            ticket_id,
+                            ticket_info,
+                            people_indices,
+                            buyer_name,
+                            buyer_phone,
+                            address_index,
+                        ):
+                            batches = list(
+                                on_submit_all(
+                                    ticket_id,
+                                    ticket_info,
+                                    people_indices,
+                                    buyer_name,
+                                    buyer_phone,
+                                    address_index,
+                                )
+                            )
+                            if not batches:
+                                return [
+                                    gr.update(value=None, visible=False),
+                                    gr.update(value=None, visible=False),
+                                ]
+
+                            updates = batches[0]
+                            save_settings_form(
+                                ticket_id,
+                                buyer_name,
+                                buyer_phone,
+                            )
+                            return updates
+
                         if go_handles:
                             def on_submit_all_and_go(
                                 ticket_id,
@@ -1217,27 +1342,24 @@ def setting_tab_v2(go_handles=None, tabs=None):
                             ):
                                 from tab.go import autofill_time_from_files
 
-                                batches = list(
-                                    on_submit_all(
-                                        ticket_id,
-                                        ticket_info,
-                                        people_indices,
-                                        buyer_name,
-                                        buyer_phone,
-                                        address_index,
-                                    )
+                                updates = on_submit_all_with_draft(
+                                    ticket_id,
+                                    ticket_info,
+                                    people_indices,
+                                    buyer_name,
+                                    buyer_phone,
+                                    address_index,
                                 )
-                                if not batches:
+                                if not isinstance(updates, list) or len(updates) < 2:
                                     return [
+                                        gr.update(value=None, visible=False),
+                                        gr.update(value=None, visible=False),
                                         gr.update(),
-                                        gr.update(),
-                                        gr.update(),
-                                        gr.update(),
-                                        gr.update(),
+                                        gr.update(value="", visible=False),
+                                        gr.update(value=""),
                                         gr.update(),
                                     ]
 
-                                updates = batches[0]
                                 config_file_update = updates[1]
                                 config_path = (
                                     config_file_update.get("value")
@@ -1245,7 +1367,14 @@ def setting_tab_v2(go_handles=None, tabs=None):
                                     else None
                                 )
                                 if not config_path:
-                                    raise gr.Error("未生成配置文件", duration=5)
+                                    return [
+                                        gr.update(value=None, visible=False),
+                                        gr.update(value=None, visible=False),
+                                        gr.update(),
+                                        gr.update(value="", visible=False),
+                                        gr.update(value=""),
+                                        gr.update(),
+                                    ]
 
                                 with open(config_path, "r", encoding="utf-8") as file:
                                     content = file.read()
@@ -1281,7 +1410,7 @@ def setting_tab_v2(go_handles=None, tabs=None):
                             )
                         else:
                             config_btn.click(
-                                fn=on_submit_all,
+                                fn=on_submit_all_with_draft,
                                 inputs=[
                                     ticket_id_ui,
                                     ticket_info_ui,
@@ -1304,6 +1433,66 @@ def setting_tab_v2(go_handles=None, tabs=None):
                             )
                             yield updates
 
+                    def restore_settings_draft():
+                        draft = _load_settings_draft()
+                        ticket_id = draft.get("ticket_id", "")
+                        buyer_name = draft.get("people_buyer_name") or ConfigDB.get(
+                            "people_buyer_name"
+                        ) or ""
+                        buyer_phone = draft.get("people_buyer_phone") or ConfigDB.get(
+                            "people_buyer_phone"
+                        ) or ""
+
+                        default_result = [
+                            gr.update(value=ticket_id),
+                            gr.update(),
+                            gr.update(
+                                visible=False,
+                                value=[],
+                                info=get_people_limit_text(None),
+                            ),
+                            gr.update(),
+                            gr.update(visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(value=buyer_name),
+                            gr.update(value=buyer_phone),
+                            gr.update(visible=False),
+                            gr.update(visible=False),
+                        ]
+                        return default_result
+
+                    def reset_project_config_ui():
+                        _clear_settings_draft()
+                        _clear_go_draft()
+                        return [
+                            gr.update(value=""),
+                            gr.update(choices=[], value=None),
+                            gr.update(
+                                choices=[],
+                                value=[],
+                                visible=False,
+                                info=get_people_limit_text(None),
+                            ),
+                            gr.update(choices=[], value=None),
+                            gr.update(visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(value=""),
+                            gr.update(value=""),
+                            gr.update(value=None, visible=False),
+                            gr.update(value=None, visible=False),
+                        ]
+
+                    def reset_go_config_ui():
+                        if not go_handles:
+                            return []
+                        return [
+                            gr.update(value=[]),
+                            gr.update(value="", visible=False),
+                            gr.update(value=""),
+                        ]
+
                     ticket_id_btn.click(
                         fn=on_submit_ticket_id_v2,
                         inputs=ticket_id_ui,
@@ -1323,9 +1512,73 @@ def setting_tab_v2(go_handles=None, tabs=None):
                         outputs=people_ui,
                     )
 
+                    ticket_id_ui.change(
+                        fn=save_settings_form,
+                        inputs=[
+                            ticket_id_ui,
+                            people_buyer_name,
+                            people_buyer_phone,
+                        ],
+                        outputs=settings_draft_state,
+                    )
+
+                    people_buyer_name.change(
+                        fn=save_settings_form,
+                        inputs=[
+                            ticket_id_ui,
+                            people_buyer_name,
+                            people_buyer_phone,
+                        ],
+                        outputs=settings_draft_state,
+                    )
+
+                    people_buyer_phone.change(
+                        fn=save_settings_form,
+                        inputs=[
+                            ticket_id_ui,
+                            people_buyer_name,
+                            people_buyer_phone,
+                        ],
+                        outputs=settings_draft_state,
+                    )
+
+        def on_login_click_with_reset():
+            return [
+                *on_login_click(),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
         login_btn.click(
-            on_login_click,
-            outputs=[qr_img, username_ui, gr_file_ui, qrcode_key_state, project_wrap, status_note],
+            on_login_click_with_reset,
+            outputs=[
+                qr_img,
+                username_ui,
+                gr_file_ui,
+                qrcode_key_state,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
         )
 
         @gr.on(qrcode_key_state.change, inputs=qrcode_key_state, outputs=check_btn)
@@ -1333,14 +1586,104 @@ def setting_tab_v2(go_handles=None, tabs=None):
             if key:
                 return gr.update(visible=True)
 
+        def on_check_login_with_reset(key):
+            return [
+                *on_check_login(key),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
         check_btn.click(
-            on_check_login,
+            on_check_login_with_reset,
             inputs=[qrcode_key_state],
-            outputs=[username_ui, gr_file_ui, qr_img, check_btn, project_wrap, status_note],
+            outputs=[
+                username_ui,
+                gr_file_ui,
+                qr_img,
+                check_btn,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
         )
 
+        def on_upload_for_v2_with_reset(filepath):
+            return [
+                *on_upload_for_v2(filepath),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
         upload_ui.upload(
-            on_upload_for_v2,
+            on_upload_for_v2_with_reset,
             [upload_ui],
-            [username_ui, gr_file_ui, project_wrap, status_note],
+            [
+                username_ui,
+                gr_file_ui,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
         )
+
+        if demo is not None:
+            demo.load(
+                fn=restore_login_session,
+                inputs=None,
+                outputs=[username_ui, gr_file_ui, project_wrap, status_note],
+            )
+            demo.load(
+                fn=restore_settings_draft,
+                inputs=None,
+                outputs=[
+                    ticket_id_ui,
+                    ticket_info_ui,
+                    people_ui,
+                    address_ui,
+                    inner,
+                    info_ui,
+                    data_ui,
+                    people_buyer_name,
+                    people_buyer_phone,
+                    config_file_ui,
+                    config_output_ui,
+                ],
+            )

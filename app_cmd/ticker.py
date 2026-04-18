@@ -46,7 +46,7 @@ def ticker_cmd(args: Namespace):
                 log_tab()
 
         with settings_mount:
-            setting_tab_v2(go_handles=go_handles, tabs=tabs)
+            setting_tab_v2(go_handles=go_handles, tabs=tabs, demo=demo)
 
     is_docker = os.path.exists("/.dockerenv") or os.environ.get("BTB_DOCKER") == "1"
     demo.launch(
