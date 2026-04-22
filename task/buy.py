@@ -473,6 +473,7 @@ def buy_stream(
                 )
                 notifierManager.start_all()
                 confirmed_order_id = confirmed_order.get("order_id")
+                yield "后台确认线程已确认待支付订单，主流程停止后续 prepare/createV2"
                 yield "3）抢票成功，后台已在订单列表确认待支付订单"
                 yield f"订单号: {confirmed_order_id}"
                 try:
@@ -605,7 +606,7 @@ def buy_stream(
                         pending_order_ids.add(tracked_order_id)
                     ensure_confirm_worker()
                     yield f"创建订单成功，已转后台确认订单。orderId={tracked_order_id}"
-                    yield "主流程将继续按限速策略尝试新的 prepare/createV2"
+                    yield f"主流程将继续按限速策略尝试新的 prepare/createV2（下一轮 prepare 至少等待 {prepare_retry_interval_seconds:.1f}s）"
                     time.sleep(prepare_retry_interval_seconds)
                     continue
                 yield "创建订单成功，但返回中未找到 orderId，继续抢票流程"
