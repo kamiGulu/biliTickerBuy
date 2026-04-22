@@ -5,6 +5,20 @@ import threading
 from argparse import Namespace
 
 
+def _load_app_css() -> str:
+    css_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "assets",
+        "style.css",
+    )
+    try:
+        with open(css_path, "r", encoding="utf-8") as file:
+            return file.read()
+    except OSError as exc:
+        loguru.logger.warning(f"加载样式文件失败: {css_path} | {exc}")
+        return ""
+
+
 def exit_app_ui():
     loguru.logger.info("程序退出")
     threading.Timer(2.0, lambda: os._exit(0)).start()
@@ -28,10 +42,11 @@ def ticker_cmd(args: Namespace):
 
     ⚠️此项目完全开源免费 （[项目地址](https://github.com/mikumifa/biliTickerBuy)），切勿进行盈利，所造成的后果与本人无关。
     """
+    app_css = _load_app_css()
 
     with gr.Blocks(
         title="biliTickerBuy",
-        css="assets/style.css",
+        css=app_css,
         head="""<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>""",
     ) as demo:
         gr.Markdown(header)

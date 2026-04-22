@@ -211,7 +211,6 @@ def on_submit_ticket_id(num):
         buyer_value = []
         addr_value = []
         ticket_value = []
-        extracted_id_message = ""
         if isinstance(num, str) and ("http" in num or "https" in num):
             num = extract_id_from_url(num)
             if num is None:
@@ -219,7 +218,6 @@ def on_submit_ticket_id(num):
                     "无法从这个链接里识别票务 ID。请确认它是会员购活动详情页链接，格式类似：https://show.bilibili.com/platform/detail.html?id=84096",
                     duration=6,
                 )
-            extracted_id_message = f"已提取URL票ID：{num}"
         elif isinstance(num, str) and num.isdigit():
             num = int(num)
         else:
@@ -365,8 +363,6 @@ def on_submit_ticket_id(num):
                         ("开展时间", f"{project_start_time} - {project_end_time}"),
                         ("场馆地址", f"{venue_name} {venue_address}"),
                     ],
-                    hint=extracted_id_message
-                    or "票务信息获取成功，请继续选择票档和购票人。",
                 ),
                 visible=True,
             ),
