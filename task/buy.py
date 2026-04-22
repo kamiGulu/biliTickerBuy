@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from random import randint
 from datetime import datetime
@@ -102,23 +103,6 @@ def _is_pending_payment_order(order: dict, project_id: int, order_id: str | None
     if pay_remain_time > 0:
         return True
     return False
-
-
-def _confirm_order(_request, project_id: int, order_id: str | None, *, max_attempts: int = 5, interval_seconds: float = 1.0):
-    last_orders = None
-    last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            orders = _get_ticket_list(_request, page=0, page_size=10)
-            last_orders = orders
-            for order in orders:
-                if _is_pending_payment_order(order, project_id, order_id):
-                    return True, order, attempt, None, orders
-        except Exception as exc:
-            last_error = exc
-        if attempt < max_attempts:
-            time.sleep(interval_seconds)
-    return False, None, max_attempts, last_error, last_orders
 
 
 def _format_countdown(seconds: float) -> str:
@@ -422,55 +406,90 @@ def buy_stream(
         if order_mode == "mobile"
         else _build_legacy_token_payload(tickets_info)
     )
-    pending_order_id = None
+    pending_order_ids: set[str] = set()
+    confirm_lock = threading.Lock()
+    confirm_stop_event = threading.Event()
+    confirm_started = False
+    confirmed_order_state = {
+        "order": None,
+        "error": None,
+        "last_orders_count": 0,
+    }
+
+    def get_confirmed_order():
+        with confirm_lock:
+            return confirmed_order_state["order"]
+
+    def ensure_confirm_worker():
+        nonlocal confirm_started
+        if confirm_started:
+            return
+        confirm_started = True
+
+        def _worker():
+            while not confirm_stop_event.is_set():
+                with confirm_lock:
+                    tracked_order_ids = list(pending_order_ids)
+                if not tracked_order_ids:
+                    time.sleep(0.2)
+                    continue
+                try:
+                    orders = _get_ticket_list(_request, page=0, page_size=10)
+                    with confirm_lock:
+                        confirmed_order_state["last_orders_count"] = len(orders)
+                    for order in orders:
+                        for order_id in tracked_order_ids:
+                            if _is_pending_payment_order(
+                                order,
+                                tickets_info["project_id"],
+                                order_id,
+                            ):
+                                with confirm_lock:
+                                    confirmed_order_state["order"] = order
+                                confirm_stop_event.set()
+                                return
+                except Exception as exc:
+                    with confirm_lock:
+                        confirmed_order_state["error"] = exc
+                time.sleep(1.0)
+
+        threading.Thread(
+            target=_worker,
+            name="btb-order-confirm",
+            daemon=True,
+        ).start()
 
     yield from _wait_until_start(time_start)
 
     while isRunning:
         try:
-            if pending_order_id:
-                yield f"检测到待确认订单，正在确认支付信息。orderId={pending_order_id}"
-                confirmed, confirmed_order, confirm_attempts, confirm_error, last_orders = _confirm_order(
-                    _request,
-                    tickets_info["project_id"],
-                    pending_order_id,
-                    max_attempts=5,
-                    interval_seconds=1.0,
+            confirmed_order = get_confirmed_order()
+            if confirmed_order:
+                confirm_stop_event.set()
+                notifierManager = NotifierManager.create_from_config(
+                    config=notifier_config,
+                    title="抢票成功",
+                    content=f"bilibili会员购，请尽快前往订单中心付款: {detail}",
                 )
-                if confirmed and confirmed_order:
-                    notifierManager = NotifierManager.create_from_config(
-                        config=notifier_config,
-                        title="抢票成功",
-                        content=f"bilibili会员购，请尽快前往订单中心付款: {detail}",
-                    )
-                    notifierManager.start_all()
-                    confirmed_order_id = confirmed_order.get("order_id") or pending_order_id
-                    yield f"3）抢票成功，已在订单列表确认待支付订单（确认次数 {confirm_attempts}/5）"
-                    yield f"订单号: {confirmed_order_id}"
-                    try:
-                        qrcode_url = get_qrcode_url(_request, str(confirmed_order_id))
-                        if show_qrcode:
-                            qr_gen = qrcode.QRCode()
-                            qr_gen.add_data(qrcode_url)
-                            qr_gen.make(fit=True)
-                            qr_gen_image = qr_gen.make_image()
-                            qr_gen_image.show()  # type: ignore
-                        else:
-                            yield "PAYMENT_QR_URL={0}".format(qrcode_url)
-                    except Exception as qr_error:
-                        logger.exception(qr_error)
-                        yield f"付款二维码获取失败，但订单已确认待支付。orderId={confirmed_order_id}"
-                        yield "请立即前往哔哩哔哩订单中心完成付款"
-                    break
-                if confirm_error:
-                    logger.exception(confirm_error)
-                yield f"待确认订单暂未在订单列表中变为待支付。orderId={pending_order_id}"
-                if last_orders:
-                    yield f"最近一次订单列表查询结果数量: {len(last_orders)}"
-                yield "订单尚未确认成功，继续抢票流程"
-                pending_order_id = None
-                time.sleep(prepare_retry_interval_seconds)
-                continue
+                notifierManager.start_all()
+                confirmed_order_id = confirmed_order.get("order_id")
+                yield "3）抢票成功，后台已在订单列表确认待支付订单"
+                yield f"订单号: {confirmed_order_id}"
+                try:
+                    qrcode_url = get_qrcode_url(_request, str(confirmed_order_id))
+                    if show_qrcode:
+                        qr_gen = qrcode.QRCode()
+                        qr_gen.add_data(qrcode_url)
+                        qr_gen.make(fit=True)
+                        qr_gen_image = qr_gen.make_image()
+                        qr_gen_image.show()  # type: ignore
+                    else:
+                        yield "PAYMENT_QR_URL={0}".format(qrcode_url)
+                except Exception as qr_error:
+                    logger.exception(qr_error)
+                    yield f"付款二维码获取失败，但订单已确认待支付。orderId={confirmed_order_id}"
+                    yield "请立即前往哔哩哔哩订单中心完成付款"
+                break
 
             yield "1）订单准备"
             yield f"下单模式: {'移动端' if order_mode == 'mobile' else '网页端'}"
@@ -512,6 +531,10 @@ def buy_stream(
             for attempt in range(1, 61):
                 if not isRunning:
                     yield "抢票结束"
+                    break
+                confirmed_order = get_confirmed_order()
+                if confirmed_order:
+                    yield "后台已确认待支付订单，停止当前提交重试"
                     break
                 try:
                     url = f"{base_url}/api/ticket/order/createV2?project_id={tickets_info['project_id']}"
@@ -566,6 +589,8 @@ def buy_stream(
                 yield "重试次数过多，重新准备订单"
                 time.sleep(prepare_retry_interval_seconds)
                 continue
+            if get_confirmed_order():
+                continue
             if result is None:
                 yield "token过期，需要重新准备订单"
                 time.sleep(prepare_retry_interval_seconds)
@@ -575,8 +600,13 @@ def buy_stream(
             if errno == 0:
                 order_id = (request_result.get("data") or {}).get("orderId")
                 if order_id:
-                    pending_order_id = str(order_id)
-                    yield f"创建订单成功，开始确认支付信息。orderId={pending_order_id}"
+                    tracked_order_id = str(order_id)
+                    with confirm_lock:
+                        pending_order_ids.add(tracked_order_id)
+                    ensure_confirm_worker()
+                    yield f"创建订单成功，已转后台确认订单。orderId={tracked_order_id}"
+                    yield "主流程将继续按限速策略尝试新的 prepare/createV2"
+                    time.sleep(prepare_retry_interval_seconds)
                     continue
                 yield "创建订单成功，但返回中未找到 orderId，继续抢票流程"
                 time.sleep(prepare_retry_interval_seconds)
@@ -595,6 +625,8 @@ def buy_stream(
             logger.exception(e)
             yield f"程序异常: {repr(e)}"
             time.sleep(prepare_retry_interval_seconds)
+
+    confirm_stop_event.set()
 
 
 def buy(
