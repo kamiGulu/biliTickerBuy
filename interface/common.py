@@ -8,6 +8,15 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (Linux; Android 16; PKR110 Build/AP3A.240617.008; wv) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+    "Chrome/138.0.7204.179 Mobile Safari/537.36 "
+    "BiliApp/8910300 mobi_app/android isNotchWindow/1 "
+    "NotchHeight=47 mallVersion/8910300 mVersion/352 "
+    "disable_rcmd/0 magent/BILI_H5_ANDROID_16_8.91.0_8910300"
+)
+
 REQUIRED_FIELDS = (
     "detail",
     "count",
@@ -139,11 +148,7 @@ def _fetch_username_silently(
         "accept": "*/*",
         "accept-language": "zh-CN,zh;q=0.9",
         "referer": "https://show.bilibili.com/",
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
+        "user-agent": MOBILE_USER_AGENT,
         "cookie": _cookies_to_header(cookies),
     }
     try:

@@ -7,6 +7,7 @@ from pathlib import Path
 import requests
 
 from .common import (
+    MOBILE_USER_AGENT,
     _cookie_store_path,
     _fetch_username_silently,
     _make_request,
@@ -43,11 +44,7 @@ def start_qr_login(
     import qrcode
 
     request_headers = headers or {
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0"
-        ),
+        "user-agent": MOBILE_USER_AGENT,
     }
     last_error = "二维码生成失败"
     for _ in range(max_retry):
@@ -97,7 +94,7 @@ def poll_qr_login(
     if not qrcode_key:
         raise ValueError("qrcode_key is required")
 
-    request_headers = headers or {"User-Agent": "Mozilla/5.0"}
+    request_headers = headers or {"user-agent": MOBILE_USER_AGENT}
     deadline = time.time() + timeout_seconds
     last_message = "等待扫码"
 

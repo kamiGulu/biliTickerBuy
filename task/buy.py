@@ -12,7 +12,7 @@ from loguru import logger
 
 from requests import HTTPError, RequestException
 
-from util import ERRNO_DICT, time_service
+from util import ConfigDB, ERRNO_DICT, time_service
 from util.Notifier import NotifierManager, NotifierConfig
 from util.BiliRequest import BiliRequest
 from util.RandomMessages import get_random_fail_message
@@ -42,8 +42,10 @@ def _wait_until_start(time_start: str):
         return
 
     timeoffset = time_service.get_timeoffset()
+    start_delay_ms = int(ConfigDB.get("go_start_delay_ms") or 50)
     yield "0) 等待开始时间"
     yield f"时间偏差已被设置为: {timeoffset}s"
+    yield f"延迟抢票设置为: {start_delay_ms}ms"
 
     try:
         target_time = datetime.strptime(time_start, "%Y-%m-%dT%H:%M:%S")
@@ -52,7 +54,15 @@ def _wait_until_start(time_start: str):
 
     yield f"计划抢票开始时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}"
 
-    time_difference = target_time.timestamp() - time.time() + timeoffset
+    time_difference = (
+        target_time.timestamp()
+        - time.time()
+        + timeoffset
+        + start_delay_ms / 1000
+    )
+    if time_difference <= 0:
+        yield "已过开抢时间，跳过等待并立即开始下单"
+        return
     end_time = time.perf_counter() + time_difference
     next_report_at = float("inf")
     while True:
@@ -66,6 +76,29 @@ def _wait_until_start(time_start: str):
 
 
 def _build_token_payload(tickets_info: dict) -> dict:
+    buyer_ids = []
+    for buyer in tickets_info.get("buyer_info", []):
+        buyer_id = buyer.get("id")
+        if buyer_id is not None:
+            buyer_ids.append(str(buyer_id))
+
+    payload = {
+        "count": tickets_info["count"],
+        "screen_id": tickets_info["screen_id"],
+        "order_type": 1,
+        "project_id": tickets_info["project_id"],
+        "sku_id": tickets_info["sku_id"],
+        "buyer_info": ",".join(buyer_ids),
+        "ignoreRequestLimit": True,
+        "ticket_agent": "",
+        "requestSource": "neul-next",
+        "token": "",
+        "newRisk": True,
+    }
+    return payload
+
+
+def _build_legacy_token_payload(tickets_info: dict) -> dict:
     return {
         "count": tickets_info["count"],
         "screen_id": tickets_info["screen_id"],
@@ -77,7 +110,176 @@ def _build_token_payload(tickets_info: dict) -> dict:
     }
 
 
+def _build_compact_buyer_info(tickets_info: dict) -> list[dict]:
+    buyers = []
+    for buyer in tickets_info.get("buyer_info", []):
+        buyers.append(
+            {
+                "id": buyer.get("id"),
+                "name": buyer.get("name", ""),
+                "tel": buyer.get("tel", ""),
+                "personal_id": buyer.get("personal_id", ""),
+                "id_type": buyer.get("id_type", 0),
+            }
+        )
+    return buyers
+
+
+def _build_click_position() -> dict:
+    now_ms = int(time.time() * 1000)
+    return {
+        "x": 337,
+        "y": 895,
+        "origin": now_ms - 600000,
+        "now": now_ms,
+    }
+
+
+def _get_cookie_value(cookie_list: list[dict], name: str, default: str = "") -> str:
+    for cookie in cookie_list:
+        if cookie.get("name") == name:
+            return str(cookie.get("value", ""))
+    return default
+
+
+def _build_create_risk_header(cookie_list: list[dict]) -> str | None:
+    identify = _get_cookie_value(cookie_list, "identify")
+    uid = _get_cookie_value(cookie_list, "DedeUserID")
+    local_buvid = (
+        _get_cookie_value(cookie_list, "Buvid")
+        or _get_cookie_value(cookie_list, "buvid3")
+        or _get_cookie_value(cookie_list, "buvid4")
+    )
+    if not identify or not local_buvid:
+        return None
+    return (
+        "appkey/1d8b6e7d45233436 brand/OnePlus "
+        f"localBuvid/{local_buvid} mVersion/352 mallVersion/8910300 "
+        "model/PKR110 osver/16 platform/h5 "
+        f"uid/{uid} channel/1 deviceId/{local_buvid} "
+        "sLocale/zh-Hans_CN cLocale/zh-Hans_CN "
+        f"identify/{identify}"
+    )
+
+
+def _build_device_id(cookie_list: list[dict]) -> str:
+    return (
+        _get_cookie_value(cookie_list, "deviceFingerprint")
+        or _get_cookie_value(cookie_list, "buvid_fp")
+        or _get_cookie_value(cookie_list, "Buvid")
+        or _get_cookie_value(cookie_list, "buvid3")
+        or _get_cookie_value(cookie_list, "_uuid")
+        or ""
+    )
+
+
+def _detect_order_mode(cookie_list: list[dict]) -> str:
+    identify = _get_cookie_value(cookie_list, "identify")
+    has_mobile_identity = bool(
+        _get_cookie_value(cookie_list, "Buvid")
+        or _get_cookie_value(cookie_list, "buvid_fp")
+        or _get_cookie_value(cookie_list, "deviceFingerprint")
+    )
+    has_mobile_auth = bool(
+        _get_cookie_value(cookie_list, "access_key")
+        or _get_cookie_value(cookie_list, "bili_ticket")
+    )
+    if identify and has_mobile_identity and has_mobile_auth:
+        return "mobile"
+    return "web"
+
+
+def _describe_cookie_capabilities(cookie_list: list[dict]) -> str:
+    checks = [
+        ("SESSDATA", bool(_get_cookie_value(cookie_list, "SESSDATA"))),
+        ("bili_jct", bool(_get_cookie_value(cookie_list, "bili_jct"))),
+        ("DedeUserID", bool(_get_cookie_value(cookie_list, "DedeUserID"))),
+        ("Buvid", bool(_get_cookie_value(cookie_list, "Buvid"))),
+        ("buvid_fp", bool(_get_cookie_value(cookie_list, "buvid_fp"))),
+        ("deviceFingerprint", bool(_get_cookie_value(cookie_list, "deviceFingerprint"))),
+        ("identify", bool(_get_cookie_value(cookie_list, "identify"))),
+        ("access_key", bool(_get_cookie_value(cookie_list, "access_key"))),
+        ("bili_ticket", bool(_get_cookie_value(cookie_list, "bili_ticket"))),
+    ]
+    return " | ".join(
+        f"{name}={'Y' if enabled else 'N'}" for name, enabled in checks
+    )
+
+
+def _build_web_headers() -> dict:
+    return {
+        "accept": "*/*",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,zh-TW;q=0.5,ja;q=0.4",
+        "content-type": "application/x-www-form-urlencoded",
+        "cookie": "",
+        "referer": "https://show.bilibili.com/",
+        "priority": "u=1, i",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
+        ),
+    }
+
+
+def _build_mobile_headers() -> dict:
+    return {
+        "accept": "*/*",
+        "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        "content-type": "application/x-www-form-urlencoded",
+        "cookie": "",
+        "origin": "https://mall.bilibili.com",
+        "priority": "u=1, i",
+        "referer": "https://mall.bilibili.com/",
+        "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Android WebView";v="138"',
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": (
+            "Mozilla/5.0 (Linux; Android 16; PKR110 Build/AP3A.240617.008; wv) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+            "Chrome/138.0.7204.179 Mobile Safari/537.36 "
+            "BiliApp/8910300 mobi_app/android isNotchWindow/1 "
+            "NotchHeight=47 mallVersion/8910300 mVersion/352 "
+            "disable_rcmd/0 magent/BILI_H5_ANDROID_16_8.91.0_8910300"
+        ),
+        "x-requested-with": "tv.danmaku.bili",
+    }
+
+
 def _build_order_payload(tickets_info: dict, token: str) -> dict:
+    device_id = tickets_info.get("device_id") or tickets_info.get("deviceId") or ""
+    now_ms = int(time.time() * 1000)
+    payload = {
+        "project_id": tickets_info["project_id"],
+        "screen_id": tickets_info["screen_id"],
+        "count": tickets_info["count"],
+        "pay_money": tickets_info["pay_money"],
+        "order_type": 1,
+        "timestamp": now_ms,
+        "id_bind": 2,
+        "need_contact": 0,
+        "contactNoticeText": "",
+        "is_package": 0,
+        "package_num": 1,
+        "contactInfo": None,
+        "sku_id": tickets_info["sku_id"],
+        "coupon_code": "",
+        "again": 0,
+        "token": token,
+        "version": "1.1.0",
+        "buyer_info": json.dumps(_build_compact_buyer_info(tickets_info), ensure_ascii=False),
+        "clickPosition": _build_click_position(),
+        "requestSource": "neul-next",
+        "newRisk": True,
+    }
+    if device_id:
+        payload["deviceId"] = device_id
+    return payload
+
+
+def _build_legacy_order_payload(tickets_info: dict, token: str) -> dict:
     payload = dict(tickets_info)
     payload["again"] = 1
     payload["token"] = token
@@ -87,7 +289,7 @@ def _build_order_payload(tickets_info: dict, token: str) -> dict:
 
 
 def _is_create_success(ret: dict, err: int) -> bool:
-    if err in {100048, 100079}:
+    if err in {100048, 100049}:
         return True
     resp_message = str(ret.get("msg", ret.get("message", "")) or "")
     return err == 0 and "defaultBBR" not in resp_message
@@ -107,19 +309,40 @@ def buy_stream(
     detail = tickets_info["detail"]
     cookies = tickets_info["cookies"]
     tickets_info.pop("cookies", None)
-    tickets_info["buyer_info"] = json.dumps(tickets_info["buyer_info"])
-    tickets_info["deliver_info"] = json.dumps(tickets_info["deliver_info"])
+    order_mode = _detect_order_mode(cookies)
+    tickets_info["device_id"] = _build_device_id(cookies)
+    if order_mode == "web":
+        tickets_info["buyer_info"] = json.dumps(tickets_info["buyer_info"], ensure_ascii=False)
+        tickets_info["deliver_info"] = json.dumps(
+            tickets_info["deliver_info"], ensure_ascii=False
+        )
     logger.info(f"使用代理：{https_proxys}")
-    _request = BiliRequest(cookies=cookies, proxy=https_proxys)
+    _request = BiliRequest(
+        headers=_build_mobile_headers() if order_mode == "mobile" else _build_web_headers(),
+        cookies=cookies,
+        proxy=https_proxys,
+    )
 
     is_hot_project = bool(tickets_info.get("is_hot_project", False))
-    token_payload = _build_token_payload(tickets_info)
+    token_payload = (
+        _build_token_payload(tickets_info)
+        if order_mode == "mobile"
+        else _build_legacy_token_payload(tickets_info)
+    )
 
     yield from _wait_until_start(time_start)
 
     while isRunning:
         try:
             yield "1）订单准备"
+            yield f"下单模式: {'移动端' if order_mode == 'mobile' else '网页端'}"
+            yield f"Cookie 特征: {_describe_cookie_capabilities(cookies)}"
+            if order_mode == "mobile":
+                risk_header = _build_create_risk_header(cookies)
+                yield "移动端扩展: x-risk-header={0}, deviceId={1}".format(
+                    "Y" if risk_header else "N",
+                    "Y" if tickets_info.get("device_id") else "N",
+                )
             if is_hot_project:
                 ctoken_generator = CTokenGenerator(time.time(), 0, randint(2000, 10000))
                 token_payload["token"] = ctoken_generator.generate_ctoken(
@@ -133,8 +356,12 @@ def buy_stream(
             request_result = request_result_normal.json()
             yield f"请求头: {request_result_normal.headers} // 请求体: {request_result}"
             yield "2）创建订单"
-            payload = _build_order_payload(
-                tickets_info, request_result["data"]["token"]
+            payload = (
+                _build_order_payload(tickets_info, request_result["data"]["token"])
+                if order_mode == "mobile"
+                else _build_legacy_order_payload(
+                    tickets_info, request_result["data"]["token"]
+                )
             )
 
             result = None
@@ -154,10 +381,19 @@ def buy_stream(
                             "https://show.bilibili.com/api/ticket/order/createV2"
                         )
                         url += "&ptoken=" + ptoken
+                    extra_headers = {}
+                    risk_header = (
+                        _build_create_risk_header(cookies)
+                        if order_mode == "mobile"
+                        else None
+                    )
+                    if risk_header:
+                        extra_headers["x-risk-header"] = risk_header
                     ret = _request.post(
                         url=url,
                         data=payload,
                         isJson=True,
+                        extra_headers=extra_headers or None,
                     ).json()
                     err = int(ret.get("errno", ret.get("code")))
                     if err == 100034:
@@ -213,8 +449,8 @@ def buy_stream(
                 else:
                     yield "PAYMENT_QR_URL={0}".format(qrcode_url)
                 break
-            if errno == 100079:
-                yield "有重复订单，停止重试"
+            if errno in {100048, 100049}:
+                yield f"{request_result.get('msg', '已存在相关订单')}，停止重试"
                 break
         except JSONDecodeError as e:
             yield f"配置文件格式错误: {e}"

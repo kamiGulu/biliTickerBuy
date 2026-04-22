@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 import html
 from datetime import datetime, timedelta
 import time
@@ -16,7 +17,7 @@ import requests
 from util.BiliRequest import BiliRequest
 from util import TEMP_PATH, GLOBAL_COOKIE_PATH, set_main_request, ConfigDB
 import util
-from util.CookieManager import parse_cookie_list
+from util.CookieManager import coerce_cookie_store, parse_cookie_list
 
 buyer_value: List[Dict[str, Any]] = []
 addr_value: List[Dict[str, Any]] = []
@@ -485,8 +486,13 @@ def upload_file(filepath):
     try:
         with open(filepath, "r", encoding="utf-8") as src:
             cookie_payload = json.load(src)
+        cookie_list = coerce_cookie_store(cookie_payload)
+        if not cookie_list:
+            raise ValueError("cookie file format is invalid")
+
+        normalized_payload = {"_default": {"1": {"key": "cookie", "value": cookie_list}}}
         with open(GLOBAL_COOKIE_PATH, "w", encoding="utf-8") as dst:
-            json.dump(cookie_payload, dst, ensure_ascii=False, indent=4)
+            json.dump(normalized_payload, dst, ensure_ascii=False, indent=4)
 
         ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
         set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
@@ -500,6 +506,185 @@ def upload_file(filepath):
         name = util.main_request.get_request_name()
         logger.exception(e)
         raise gr.Error("登录出现错误", duration=5)
+
+
+def _save_cookie_list_as_login(cookie_list):
+    if not cookie_list:
+        raise ValueError("cookie list is empty")
+
+    normalized_payload = {"_default": {"1": {"key": "cookie", "value": cookie_list}}}
+    with open(GLOBAL_COOKIE_PATH, "w", encoding="utf-8") as dst:
+        json.dump(normalized_payload, dst, ensure_ascii=False, indent=4)
+
+    ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
+    set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
+    return util.main_request.get_request_name()
+
+
+def _parse_cookie_header_value(cookie_header_value: str) -> list[dict]:
+    cookie_list = []
+    for item in cookie_header_value.split(";"):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        name, value = item.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if name:
+            cookie_list.append({"name": name, "value": value})
+    return cookie_list
+
+
+def _extract_cookie_list_from_text(cookie_text: str) -> list[dict]:
+    text = (cookie_text or "").strip()
+    if not text:
+        raise ValueError("Cookie 内容为空")
+
+    direct_value = re.sub(r"(?is)^cookie:\s*", "", text).strip()
+    direct_value = _trim_cookie_header_tail(direct_value)
+    cookie_list = _parse_cookie_header_value(direct_value)
+    if cookie_list:
+        return cookie_list
+    raise ValueError("填写内容不是有效的 Cookie 字符串")
+
+
+def _trim_cookie_header_tail(cookie_header_value: str) -> str:
+    value = (cookie_header_value or "").strip()
+    tail_match = re.search(r"""(['"])\s+(?=-[A-Za-z])""", value)
+    if tail_match:
+        value = value[:tail_match.start()].rstrip()
+    return value.rstrip("'\"").strip()
+
+
+def _extract_cookie_list_from_curl(curl_text: str) -> list[dict]:
+    text = (curl_text or "").strip()
+    if not text:
+        raise ValueError("curl 内容为空")
+
+    normalized = text.replace("\\\n", " ").replace("`\n", " ").replace("^\n", " ")
+
+    for line in text.splitlines():
+        stripped = line.strip().rstrip("\\").strip()
+        header_match = re.search(r"(?i)(?:-H|--header)\s+.*?Cookie:\s*(.*)$", stripped)
+        if header_match:
+            cookie_header_value = _trim_cookie_header_tail(header_match.group(1))
+            if cookie_header_value:
+                cookie_list = _parse_cookie_header_value(cookie_header_value)
+                if cookie_list:
+                    return cookie_list
+
+    cookie_start_match = re.search(r"(?is)Cookie:\s*", normalized)
+    if cookie_start_match:
+        cookie_start = cookie_start_match.end()
+        next_option_match = re.search(
+            r"""\s+(?:
+                -H|--header|
+                -d|--data(?:-raw|-binary|-urlencode)?|
+                -X|--request|
+                -A|--user-agent|
+                -b|--cookie|
+                -e|--referer|
+                -F|--form|
+                -G|--get|
+                -I|--head|
+                -k|--insecure|
+                -L|--location|
+                -o|--output|
+                -u|--user
+            )\b""",
+            normalized[cookie_start:],
+            re.IGNORECASE | re.VERBOSE,
+        )
+        cookie_end = (
+            cookie_start + next_option_match.start()
+            if next_option_match
+            else len(normalized)
+        )
+        cookie_header_value = _trim_cookie_header_tail(
+            normalized[cookie_start:cookie_end]
+        )
+        if cookie_header_value:
+            cookie_list = _parse_cookie_header_value(cookie_header_value)
+            if cookie_list:
+                return cookie_list
+
+    try:
+        tokens = shlex.split(normalized, posix=True)
+    except ValueError:
+        tokens = []
+
+    for idx, token in enumerate(tokens):
+        if token not in {"-H", "--header"}:
+            continue
+        if idx + 1 >= len(tokens):
+            continue
+        header_value = tokens[idx + 1]
+        if header_value.lower().startswith("cookie:"):
+            cookie_header_value = _trim_cookie_header_tail(
+                header_value.split(":", 1)[1]
+            )
+            cookie_list = _parse_cookie_header_value(cookie_header_value)
+            if cookie_list:
+                return cookie_list
+
+    match = re.search(
+        r"(?is)(?:-H|--header)\s+(['\"])Cookie:\s*(.*?)\1",
+        normalized,
+    )
+    if match:
+        cookie_list = _parse_cookie_header_value(
+            _trim_cookie_header_tail(match.group(2))
+        )
+        if cookie_list:
+            return cookie_list
+
+    raise ValueError("未在 curl 中找到 Cookie 请求头")
+
+
+def _extract_cookie_list_from_login_input(login_text: str) -> list[dict]:
+    text = (login_text or "").strip()
+    if not text:
+        raise ValueError("输入内容为空")
+
+    if re.search(r"(?i)\bcurl\b", text) or re.search(r"(?i)(?:-H|--header)\b", text):
+        return _extract_cookie_list_from_curl(text)
+    return _extract_cookie_list_from_text(text)
+
+
+def _build_cookie_diagnostic_note(cookie_list: list[dict], *, visible: bool) -> str:
+    if visible:
+        return ""
+
+    cookie_names = {
+        str(cookie.get("name", "")).strip()
+        for cookie in (cookie_list or [])
+        if cookie.get("name")
+    }
+    checks = [
+        "SESSDATA",
+        "bili_jct",
+        "DedeUserID",
+        "Buvid",
+        "buvid_fp",
+        "deviceFingerprint",
+        "identify",
+        "access_key",
+        "bili_ticket",
+    ]
+    flags = " | ".join(
+        f"{name}={'Y' if name in cookie_names else 'N'}" for name in checks
+    )
+    missing = [name for name in ("SESSDATA", "bili_jct", "DedeUserID") if name not in cookie_names]
+    missing_text = "、".join(missing) if missing else "基础登录 Cookie 已提取，可能是 Cookie 过期或校验接口不认当前状态"
+    return (
+        '<div class="btb-muted">'
+        "<p>已提取 Cookie，但登录状态未通过校验。</p>"
+        f"<p>本次共提取 {len(cookie_list)} 个 Cookie。</p>"
+        f"<p>关键项: {flags}</p>"
+        f"<p>优先检查: {missing_text}</p>"
+        "<p>建议优先粘贴完整 Cookie 字符串，只有在需要时再粘贴整条 curl。</p>"
+        "</div>"
+    )
 
 
 def setting_tab():
@@ -1042,6 +1227,15 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 login_btn = gr.Button("扫码登录")
                 upload_ui = gr.UploadButton(label="导入登录文件")
 
+            curl_login_ui = gr.Textbox(
+                label="填写 Cookie / CURL 进行登录",
+                placeholder="可以直接粘贴完整 Cookie 字符串，或粘贴带 Cookie 头的完整 curl 命令",
+                lines=6,
+                max_lines=10,
+                info="优先推荐直接粘贴完整 Cookie；也支持浏览器或抓包工具导出的 curl，请至少包含一个 Cookie: 请求头",
+            )
+            curl_login_btn = gr.Button("从 Cookie / CURL 登录")
+
             qrcode_key_state = gr.State("")
 
             with gr.Row(elem_classes="!gap-3 !flex-wrap"):
@@ -1139,6 +1333,22 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                     updates[1],
                     gr.update(visible=visible),
                     gr.update(value="" if visible else '<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                ]
+
+            def on_curl_login(curl_text):
+                cookie_list = _extract_cookie_list_from_login_input(curl_text)
+                name = _save_cookie_list_as_login(cookie_list)
+                visible = _is_logged_in(name)
+                if visible:
+                    gr.Info("已提取 Cookie 并登录成功", duration=5)
+                else:
+                    gr.Warning("已提取 Cookie，但登录状态校验失败，请检查输入内容是否完整", duration=6)
+                return [
+                    gr.update(value=name if visible else "未登录"),
+                    gr.update(value=GLOBAL_COOKIE_PATH),
+                    gr.update(value="" if visible else curl_text),
+                    gr.update(visible=visible),
+                    gr.update(value=_build_cookie_diagnostic_note(cookie_list, visible=visible)),
                 ]
 
             def restore_login_session():
@@ -1633,12 +1843,52 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 *reset_go_config_ui(),
             ]
 
+        def on_curl_login_with_reset(curl_text):
+            return [
+                *on_curl_login(curl_text),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
         upload_ui.upload(
             on_upload_for_v2_with_reset,
             [upload_ui],
             [
                 username_ui,
                 gr_file_ui,
+                curl_login_ui,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
+        )
+
+        curl_login_btn.click(
+            fn=on_curl_login_with_reset,
+            inputs=[curl_login_ui],
+            outputs=[
+                username_ui,
+                gr_file_ui,
+                curl_login_ui,
                 project_wrap,
                 status_note,
                 ticket_id_ui,

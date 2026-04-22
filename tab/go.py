@@ -8,7 +8,7 @@ from gradio import SelectData
 from loguru import logger
 import requests
 
-from task.buy import buy_new_terminal
+from task.buy import _describe_cookie_capabilities, _detect_order_mode, buy_new_terminal
 import util
 from util import ConfigDB, Endpoint, GlobalStatusInstance, time_service
 
@@ -128,11 +128,15 @@ def autofill_time_from_files(files):
     )
 
     if latest_sale_start <= adjusted_now:
+        autofill_value = latest_sale_start.strftime("%Y-%m-%dT%H:%M:%S")
         gr.Warning(
-            "所有配置对应票档都已经过起售时间，不自动填写抢票时间。\n"
-            f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n{sale_start_lines}"
+            "已自动填写抢票时间，但当前已经过了开抢时间。\n"
+            "设置仍然生效，开始抢购时会立即执行，效果等同于不设置时间。\n"
+            f"自动填写值: {latest_sale_start.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"当前校准后时间: {adjusted_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{sale_start_lines}"
         )
-        return ""
+        return autofill_value
 
     autofill_value = latest_sale_start.strftime("%Y-%m-%dT%H:%M:%S")
     if len(unique_sale_starts) == 1:
@@ -158,6 +162,7 @@ def go_tab(demo: gr.Blocks):
         go_draft_state = gr.State({})
         with gr.Column(elem_classes="btb-pane !gap-3"):
             gr.Markdown("### 操作抢票", elem_classes="!p-0")
+            order_mode_status_ui = gr.HTML()
             with gr.Column(elem_classes="btb-pane-sub !gap-3"):
                 upload_ui = gr.Files(
                     label="配置文件",
@@ -599,6 +604,12 @@ def go_tab(demo: gr.Blocks):
                 minimum=1,
                 info="设置抢票请求之间的时间间隔（单位：毫秒），建议不要设置太小",
             )
+            start_delay_ui = gr.Number(
+                label="延迟抢票(ms)",
+                value=(ConfigDB.get("go_start_delay_ms") or 50),
+                minimum=0,
+                info="到达开抢时间后额外再等多久再发第一轮请求，默认 50ms；这不是 NTP 校准时间",
+            )
             choices = ["网页"]
             if platform.system() == "Windows":
                 choices.insert(0, "终端")  # 或 append，取决于你想要顺序
@@ -611,12 +622,14 @@ def go_tab(demo: gr.Blocks):
                 interactive=True,
             )
 
-    def save_go_preferences(interval, terminal, hide_random_message):
+    def save_go_preferences(interval, start_delay_ms, terminal, hide_random_message):
         ConfigDB.insert("go_interval", interval)
+        ConfigDB.insert("go_start_delay_ms", start_delay_ms)
         ConfigDB.insert("go_terminal", terminal)
         ConfigDB.insert("go_hide_random_message", hide_random_message)
         return _save_go_draft_patch(
             interval=interval,
+            start_delay_ms=start_delay_ms,
             terminal=terminal,
             hide_random_message=hide_random_message,
         )
@@ -735,6 +748,7 @@ def go_tab(demo: gr.Blocks):
         files = _normalize_existing_files(draft.get("files"))
         ticket_preview = draft.get("ticket_preview") or _read_first_config_text(files)
         interval = draft.get("interval")
+        start_delay_ms = draft.get("start_delay_ms")
         terminal = draft.get("terminal") or ConfigDB.get("go_terminal")
         hide_random_message = draft.get("hide_random_message")
         saved_hide_random_message = ConfigDB.get("go_hide_random_message")
@@ -744,6 +758,11 @@ def go_tab(demo: gr.Blocks):
             gr.update(value=files),
             gr.update(value=ticket_preview, visible=bool(ticket_preview)),
             gr.update(value=interval if isinstance(interval, (int, float)) else (ConfigDB.get("go_interval") or 300)),
+            gr.update(
+                value=start_delay_ms
+                if isinstance(start_delay_ms, (int, float))
+                else (ConfigDB.get("go_start_delay_ms") or 50)
+            ),
             gr.update(value=terminal),
             gr.update(
                 value=hide_random_message
@@ -786,8 +805,39 @@ def go_tab(demo: gr.Blocks):
     def tick():
         return f"当前时间戳：{int(time.time())}"
 
+    def refresh_order_mode_status():
+        try:
+            cookie_list = util.main_request.cookieManager.get_cookies(force=True) or []
+        except Exception:
+            cookie_list = []
+        mode = _detect_order_mode(cookie_list) if cookie_list else "web"
+        mode_text = "APP下单模式" if mode == "mobile" else "网页下单模式"
+        badge_class = "btb-badge-amber" if mode == "mobile" else "btb-badge-blue"
+        cookie_text = _describe_cookie_capabilities(cookie_list) if cookie_list else "未检测到有效登录 Cookie"
+        return f"""
+        <div class="btb-card btb-card-compact">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p class="text-base font-semibold text-slate-900 dark:text-slate-100">当前 token 模式</p>
+                    <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">
+                        {mode_text}
+                    </p>
+                    <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        Cookie 特征: {cookie_text}
+                    </p>
+                </div>
+                <span class="{badge_class}">{mode_text}</span>
+            </div>
+        </div>
+        """
+
     timer = gr.Textbox(label="定时更新", interactive=False, visible=False)
     demo.load(fn=tick, inputs=None, outputs=timer, every=1)
+    demo.load(
+        fn=refresh_order_mode_status,
+        inputs=None,
+        outputs=order_mode_status_ui,
+    )
 
     @gr.render(inputs=timer)
     def show_split(text):
@@ -832,17 +882,22 @@ def go_tab(demo: gr.Blocks):
 
     interval_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
+        outputs=go_draft_state,
+    )
+    start_delay_ui.change(
+        fn=save_go_preferences,
+        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
         outputs=go_draft_state,
     )
     terminal_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
         outputs=go_draft_state,
     )
     show_random_message_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, terminal_ui, show_random_message_ui],
+        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
         outputs=go_draft_state,
     )
 
@@ -853,6 +908,7 @@ def go_tab(demo: gr.Blocks):
             upload_ui,
             ticket_ui,
             interval_ui,
+            start_delay_ui,
             terminal_ui,
             show_random_message_ui,
             _auto_fill_time_tmp,

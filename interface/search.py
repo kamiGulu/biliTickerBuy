@@ -6,7 +6,7 @@ from urllib.parse import quote, urlencode
 import requests
 
 from .auth import get_login_state
-from .common import _cookies_to_header, _resolve_cookie_list
+from .common import MOBILE_USER_AGENT, _cookies_to_header, _resolve_cookie_list
 
 
 def search_tickets(
@@ -53,11 +53,7 @@ def search_tickets(
         "referer": "https://show.bilibili.com/platform/search.html?searchValue={0}".format(
             quote(keyword.strip(), safe="")
         ),
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/146.0.0.0 Safari/537.36"
-        ),
+        "user-agent": MOBILE_USER_AGENT,
         "cookie": _cookies_to_header(active_cookies),
     }
     response = requests.get(
