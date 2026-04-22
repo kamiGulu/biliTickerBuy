@@ -8,6 +8,7 @@ from datetime import datetime
 from json import JSONDecodeError
 import shutil
 import qrcode
+import requests
 from loguru import logger
 
 from requests import HTTPError, RequestException
@@ -22,12 +23,102 @@ from util.CTokenUtil import CTokenGenerator
 base_url = "https://show.bilibili.com"
 
 
-def get_qrcode_url(_request, order_id) -> str:
+def _build_browser_cookie_header(_request) -> str:
+    cookies = _request.cookieManager.get_cookies(force=True) or []
+    return "; ".join(
+        f"{cookie.get('name')}={cookie.get('value')}"
+        for cookie in cookies
+        if cookie.get("name") and cookie.get("value") is not None
+    )
+
+
+def _build_orderlist_headers(_request) -> dict:
+    headers = _build_web_headers()
+    headers["cookie"] = _build_browser_cookie_header(_request)
+    headers["accept"] = "*/*"
+    headers["referer"] = "https://show.bilibili.com/orderlist"
+    headers["sec-ch-ua"] = '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"'
+    headers["sec-ch-ua-mobile"] = "?0"
+    headers["sec-ch-ua-platform"] = '"Windows"'
+    headers["sec-fetch-dest"] = "empty"
+    headers["sec-fetch-mode"] = "cors"
+    headers["sec-fetch-site"] = "same-origin"
+    return headers
+
+
+def _get_pay_param(_request, order_id) -> dict:
     url = f"{base_url}/api/ticket/order/getPayParam?order_id={order_id}"
-    data = _request.get(url).json()
-    if data.get("errno", data.get("code")) == 0:
-        return data["data"]["code_url"]
-    raise ValueError("获取二维码失败")
+    headers = _build_orderlist_headers(_request)
+
+    for attempt in range(1, 3):
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("errno", data.get("code")) == 0:
+            return data.get("data") or {}
+        if attempt < 2:
+            time.sleep(1)
+    raise ValueError(f"获取支付参数失败: {data}")
+
+
+def get_qrcode_url(_request, order_id) -> str:
+    payload = _get_pay_param(_request, order_id)
+    qrcode_url = payload.get("code_url") or payload.get("codeUrl")
+    if qrcode_url:
+        return qrcode_url
+    raise KeyError(f"code_url missing in getPayParam response: {payload}")
+
+
+def _get_ticket_list(_request, *, page: int = 0, page_size: int = 10) -> list[dict]:
+    url = f"{base_url}/api/ticket/ordercenter/ticketList?page={page}&page_size={page_size}"
+    headers = _build_orderlist_headers(_request)
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("errno", payload.get("code")) != 0:
+        raise ValueError(f"获取订单列表失败: {payload}")
+    data = payload.get("data") or {}
+    order_list = data.get("list")
+    if isinstance(order_list, list):
+        return order_list
+    raise ValueError(f"订单列表格式异常: {payload}")
+
+
+def _is_pending_payment_order(order: dict, project_id: int, order_id: str | None = None) -> bool:
+    if str(order.get("item_id", "")) != str(project_id):
+        return False
+    if order_id and str(order.get("order_id", "")) != str(order_id):
+        return False
+
+    sub_status_name = str(order.get("sub_status_name", "") or "")
+    status = int(order.get("status", -1))
+    sub_status = int(order.get("sub_status", -1))
+    pay_remain_time = int(order.get("pay_remain_time", 0) or 0)
+
+    if sub_status_name == "待支付":
+        return True
+    if status == 1 and sub_status == 1:
+        return True
+    if pay_remain_time > 0:
+        return True
+    return False
+
+
+def _confirm_order(_request, project_id: int, order_id: str | None, *, max_attempts: int = 5, interval_seconds: float = 1.0):
+    last_orders = None
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            orders = _get_ticket_list(_request, page=0, page_size=10)
+            last_orders = orders
+            for order in orders:
+                if _is_pending_payment_order(order, project_id, order_id):
+                    return True, order, attempt, None, orders
+        except Exception as exc:
+            last_error = exc
+        if attempt < max_attempts:
+            time.sleep(interval_seconds)
+    return False, None, max_attempts, last_error, last_orders
 
 
 def _format_countdown(seconds: float) -> str:
@@ -324,16 +415,63 @@ def buy_stream(
     )
 
     is_hot_project = bool(tickets_info.get("is_hot_project", False))
+    prepare_retry_interval_seconds = max(interval, 1000) / 1000
+    create_retry_interval_seconds = max(interval, 300) / 1000
     token_payload = (
         _build_token_payload(tickets_info)
         if order_mode == "mobile"
         else _build_legacy_token_payload(tickets_info)
     )
+    pending_order_id = None
 
     yield from _wait_until_start(time_start)
 
     while isRunning:
         try:
+            if pending_order_id:
+                yield f"检测到待确认订单，正在确认支付信息。orderId={pending_order_id}"
+                confirmed, confirmed_order, confirm_attempts, confirm_error, last_orders = _confirm_order(
+                    _request,
+                    tickets_info["project_id"],
+                    pending_order_id,
+                    max_attempts=5,
+                    interval_seconds=1.0,
+                )
+                if confirmed and confirmed_order:
+                    notifierManager = NotifierManager.create_from_config(
+                        config=notifier_config,
+                        title="抢票成功",
+                        content=f"bilibili会员购，请尽快前往订单中心付款: {detail}",
+                    )
+                    notifierManager.start_all()
+                    confirmed_order_id = confirmed_order.get("order_id") or pending_order_id
+                    yield f"3）抢票成功，已在订单列表确认待支付订单（确认次数 {confirm_attempts}/5）"
+                    yield f"订单号: {confirmed_order_id}"
+                    try:
+                        qrcode_url = get_qrcode_url(_request, str(confirmed_order_id))
+                        if show_qrcode:
+                            qr_gen = qrcode.QRCode()
+                            qr_gen.add_data(qrcode_url)
+                            qr_gen.make(fit=True)
+                            qr_gen_image = qr_gen.make_image()
+                            qr_gen_image.show()  # type: ignore
+                        else:
+                            yield "PAYMENT_QR_URL={0}".format(qrcode_url)
+                    except Exception as qr_error:
+                        logger.exception(qr_error)
+                        yield f"付款二维码获取失败，但订单已确认待支付。orderId={confirmed_order_id}"
+                        yield "请立即前往哔哩哔哩订单中心完成付款"
+                    break
+                if confirm_error:
+                    logger.exception(confirm_error)
+                yield f"待确认订单暂未在订单列表中变为待支付。orderId={pending_order_id}"
+                if last_orders:
+                    yield f"最近一次订单列表查询结果数量: {len(last_orders)}"
+                yield "订单尚未确认成功，继续抢票流程"
+                pending_order_id = None
+                time.sleep(prepare_retry_interval_seconds)
+                continue
+
             yield "1）订单准备"
             yield f"下单模式: {'移动端' if order_mode == 'mobile' else '网页端'}"
             yield f"Cookie 特征: {_describe_cookie_capabilities(cookies)}"
@@ -355,12 +493,18 @@ def buy_stream(
             )
             request_result = request_result_normal.json()
             yield f"请求头: {request_result_normal.headers} // 请求体: {request_result}"
+            request_data = request_result.get("data")
+            if not isinstance(request_data, dict) or not request_data.get("token"):
+                err = int(request_result.get("errno", request_result.get("code", -1)))
+                yield f"订单准备失败，跳过本轮创建订单: [{err}]({ERRNO_DICT.get(err, request_result.get('message', '未知错误'))})"
+                time.sleep(prepare_retry_interval_seconds)
+                continue
             yield "2）创建订单"
             payload = (
-                _build_order_payload(tickets_info, request_result["data"]["token"])
+                _build_order_payload(tickets_info, request_data["token"])
                 if order_mode == "mobile"
                 else _build_legacy_order_payload(
-                    tickets_info, request_result["data"]["token"]
+                    tickets_info, request_data["token"]
                 )
             )
 
@@ -375,7 +519,7 @@ def buy_stream(
                         payload["ctoken"] = ctoken_generator.generate_ctoken(  # type: ignore
                             is_create_v2=True
                         )
-                        ptoken = request_result["data"]["ptoken"] or ""
+                        ptoken = request_data.get("ptoken") or ""
                         payload["ptoken"] = ptoken
                         payload["orderCreateUrl"] = (
                             "https://show.bilibili.com/api/ticket/order/createV2"
@@ -407,59 +551,50 @@ def buy_stream(
                         break
                     yield f"[尝试 {attempt}/60]  [{err}]({ERRNO_DICT.get(err, '未知错误码')}) | {ret}"
 
-                    time.sleep(interval / 1000)
+                    time.sleep(create_retry_interval_seconds)
 
                 except RequestException as e:
                     yield f"[尝试 {attempt}/60] 请求异常: {e}"
-                    time.sleep(interval / 1000)
+                    time.sleep(create_retry_interval_seconds)
 
                 except Exception as e:
                     yield f"[尝试 {attempt}/60] 未知异常: {e}"
-                    time.sleep(interval / 1000)
+                    time.sleep(create_retry_interval_seconds)
             else:
                 if show_random_message:
                     yield f"群友说👴： {get_random_fail_message()}"
                 yield "重试次数过多，重新准备订单"
+                time.sleep(prepare_retry_interval_seconds)
                 continue
             if result is None:
                 yield "token过期，需要重新准备订单"
+                time.sleep(prepare_retry_interval_seconds)
                 continue
 
             request_result, errno = result
             if errno == 0:
-                notifierManager = NotifierManager.create_from_config(
-                    config=notifier_config,
-                    title="抢票成功",
-                    content=f"bilibili会员购，请尽快前往订单中心付款: {detail}",
-                )
-
-                notifierManager.start_all()
-
-                yield "3）抢票成功，弹出付款二维码"
-                qrcode_url = get_qrcode_url(
-                    _request,
-                    request_result["data"]["orderId"],
-                )
-                if show_qrcode:
-                    qr_gen = qrcode.QRCode()
-                    qr_gen.add_data(qrcode_url)
-                    qr_gen.make(fit=True)
-                    qr_gen_image = qr_gen.make_image()
-                    qr_gen_image.show()  # type: ignore
-                else:
-                    yield "PAYMENT_QR_URL={0}".format(qrcode_url)
-                break
+                order_id = (request_result.get("data") or {}).get("orderId")
+                if order_id:
+                    pending_order_id = str(order_id)
+                    yield f"创建订单成功，开始确认支付信息。orderId={pending_order_id}"
+                    continue
+                yield "创建订单成功，但返回中未找到 orderId，继续抢票流程"
+                time.sleep(prepare_retry_interval_seconds)
+                continue
             if errno in {100048, 100049}:
                 yield f"{request_result.get('msg', '已存在相关订单')}，停止重试"
                 break
         except JSONDecodeError as e:
             yield f"配置文件格式错误: {e}"
+            time.sleep(prepare_retry_interval_seconds)
         except HTTPError as e:
             logger.exception(e)
             yield f"请求错误: {e}"
+            time.sleep(prepare_retry_interval_seconds)
         except Exception as e:
             logger.exception(e)
             yield f"程序异常: {repr(e)}"
+            time.sleep(prepare_retry_interval_seconds)
 
 
 def buy(
