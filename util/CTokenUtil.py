@@ -6,8 +6,17 @@ from dataclasses import dataclass, replace
 from typing import Dict, Optional, Tuple
 
 
+UINT8_MAX = 255
+DEFAULT_VISIBLE_COUNT = 2
+DEFAULT_SCROLL = 0
+DEFAULT_SCREEN_POSITION = 0
+DEFAULT_OPEN_WINDOW_COUNT = 0
+CREATE_OPEN_WINDOW_COUNT = 25
+SATURATED_VIEWPORT_VALUE = UINT8_MAX
+
+
 def _uint8(value: int | float) -> int:
-    return max(0, min(int(value or 0), 255))
+    return max(0, min(int(value or 0), UINT8_MAX))
 
 
 def _uint16(value: int | float) -> int:
@@ -126,20 +135,20 @@ class CTokenGenerator:
 
     def _legacy_state(self) -> CollectState:
         return CollectState(
-            touch_end_count=random.randint(3, 10),
-            visible_count=2,
-            open_window_count=0,
+            touch_end_count=random.randint(30, 100),
+            visible_count=DEFAULT_VISIBLE_COUNT,
+            open_window_count=DEFAULT_OPEN_WINDOW_COUNT,
             interval_seconds=self.stay_time,
             prepare_elapsed_seconds=0,
-            scroll_x=0,
-            scroll_y=0,
-            inner_width=255,
-            inner_height=255,
-            outer_width=255,
-            outer_height=255,
-            screen_x=0,
-            screen_y=0,
-            screen_width=255,
+            scroll_x=DEFAULT_SCROLL,
+            scroll_y=DEFAULT_SCROLL,
+            inner_width=SATURATED_VIEWPORT_VALUE,
+            inner_height=SATURATED_VIEWPORT_VALUE,
+            outer_width=SATURATED_VIEWPORT_VALUE,
+            outer_height=SATURATED_VIEWPORT_VALUE,
+            screen_x=DEFAULT_SCREEN_POSITION,
+            screen_y=DEFAULT_SCREEN_POSITION,
+            screen_width=SATURATED_VIEWPORT_VALUE,
         )
 
     def _legacy_monotonic_now(self, session: CollectSession) -> float:
@@ -165,10 +174,14 @@ class CTokenGenerator:
     ) -> str:
         session = self._sessions[session_key]
 
-        # 旧方案 createV2 阶段的基准值，同时允许调用方继续叠加用户操作变化。
-        session.state.touch_end_count = max(session.state.touch_end_count, 255)
-        session.state.visible_count = max(session.state.visible_count, 2)
-        session.state.open_window_count = max(session.state.open_window_count, 25)
+        session.state.visible_count = max(
+            session.state.visible_count,
+            DEFAULT_VISIBLE_COUNT,
+        )
+        session.state.open_window_count = max(
+            session.state.open_window_count,
+            CREATE_OPEN_WINDOW_COUNT,
+        )
 
         if touch_end_delta:
             session.mark_touch_end(touch_end_delta)
