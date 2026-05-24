@@ -18,7 +18,7 @@ from util import ConfigDB, ERRNO_DICT, time_service
 from util.Notifier import NotifierManager, NotifierConfig
 from util.BiliRequest import BiliRequest
 from util.RandomMessages import get_random_fail_message
-from util.CTokenUtil import CTokenGenerator
+from util.CTokenUtil import CTOKEN_GENERATOR_VERSION, CTokenGenerator
 
 
 base_url = "https://show.bilibili.com"
@@ -504,6 +504,14 @@ def buy_stream(
             if is_hot_project:
                 ctoken_generator = CTokenGenerator(time.time(), 0, randint(2000, 10000))
                 ctoken_session_key, token_payload["token"] = ctoken_generator.prepare()
+                yield (
+                    "热门项目 ctoken 生成器版本: {version} | "
+                    "prepare_session={session} | prepare_token_len={token_len}"
+                ).format(
+                    version=CTOKEN_GENERATOR_VERSION,
+                    session=ctoken_session_key[:8],
+                    token_len=len(token_payload["token"]),
+                )
             request_result_normal = _request.post(
                 url=f"{base_url}/api/ticket/order/prepare?project_id={tickets_info['project_id']}",
                 data=token_payload,
@@ -543,6 +551,15 @@ def buy_stream(
                             touch_end_delta=1 if attempt > 1 else 0,
                             scroll_y=attempt - 1,
                         )
+                        if attempt == 1:
+                            yield (
+                                "热门项目 createV2 ctoken 使用会话生成 | "
+                                "version={version} | session={session} | ctoken_len={token_len}"
+                            ).format(
+                                version=CTOKEN_GENERATOR_VERSION,
+                                session=ctoken_session_key[:8],  # type: ignore
+                                token_len=len(payload["ctoken"]),
+                            )
                         ptoken = request_data.get("ptoken") or ""
                         payload["ptoken"] = ptoken
                         payload["orderCreateUrl"] = (
