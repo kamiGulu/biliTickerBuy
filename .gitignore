@@ -23,3 +23,4 @@ main.dist
 .DS_Store
 bilitickerbuy.egg-info
 btb_runs
+/docs
