@@ -1,0 +1,38 @@
+name: Ruff Check
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff-check:
+    name: Ruff Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run Ruff lint
+        run: uv tool run --from ruff==0.12.0 ruff check .
+
+      - name: Run Ruff format check
+        run: uv tool run --from ruff==0.12.0 ruff format --check .
