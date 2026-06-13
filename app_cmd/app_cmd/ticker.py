@@ -4,10 +4,12 @@ import gradio as gr
 import threading
 from argparse import Namespace
 
+from util import get_application_path
+
 
 def _load_app_css() -> str:
     css_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        get_application_path(),
         "assets",
         "style.css",
     )

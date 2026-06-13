@@ -1,4 +1,5 @@
 import time
+import httpx
 import loguru
 import requests
 from util.CookieManager import CookieManager
@@ -27,6 +28,9 @@ class BiliRequest:
         if len(self.proxy_list) == 0:
             raise ValueError("at least have none proxy")
         self.now_proxy_idx = 0
+        self._http2_client = None
+        self._http2_client_proxy = None
+        self._http2_unavailable = False
         self.cookieManager = CookieManager(cookies_config_path, cookies)
         self.headers = headers or {
             "accept": "*/*",
@@ -46,6 +50,7 @@ class BiliRequest:
             "x-requested-with": "tv.danmaku.bili",
         }
         self.request_count = 0  # 记录请求次数
+        self._apply_current_proxy()
 
     def count_and_sleep(self, threshold=60, sleep_time=60):
         """
@@ -61,19 +66,19 @@ class BiliRequest:
 
     def get(self, url, data=None, isJson=False, extra_headers=None):
         self.headers["cookie"] = self.cookieManager.get_cookies_str()
-        if isJson:
-            self.headers["Content-Type"] = "application/json"
-            response = self.session.get(
-                url, json=data, headers=self.headers, timeout=10
-            )
-        else:
-            self.headers["Content-Type"] = "application/x-www-form-urlencoded"
         request_headers = dict(self.headers)
         if extra_headers:
             request_headers.update(extra_headers)
-        response = self.session.get(
-            url, params=data, headers=request_headers, timeout=10
-        )
+        if isJson:
+            request_headers["Content-Type"] = "application/json"
+            response = self.session.get(
+                url, json=data, headers=request_headers, timeout=10
+            )
+        else:
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            response = self.session.get(
+                url, params=data, headers=request_headers, timeout=10
+            )
         if response.status_code == 412:
             self.count_and_sleep()
             self.switch_proxy()
@@ -89,6 +94,10 @@ class BiliRequest:
 
     def switch_proxy(self):
         self.now_proxy_idx = (self.now_proxy_idx + 1) % len(self.proxy_list)
+        self.close_http2_client()
+        self._apply_current_proxy()
+
+    def _apply_current_proxy(self):
         current_proxy = self.proxy_list[self.now_proxy_idx]
 
         if current_proxy == "none":
@@ -101,17 +110,17 @@ class BiliRequest:
 
     def post(self, url, data=None, isJson=False, extra_headers=None):
         self.headers["cookie"] = self.cookieManager.get_cookies_str()
-        if isJson:
-            self.headers["Content-Type"] = "application/json"
-            response = self.session.post(
-                url, json=data, headers=self.headers, timeout=10
-            )
-        else:
-            self.headers["content-type"] = "application/x-www-form-urlencoded"
         request_headers = dict(self.headers)
         if extra_headers:
             request_headers.update(extra_headers)
-        response = self.session.post(url, data=data, headers=request_headers, timeout=10)
+        if isJson:
+            request_headers["Content-Type"] = "application/json"
+            response = self.session.post(
+                url, json=data, headers=request_headers, timeout=10
+            )
+        else:
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            response = self.session.post(url, data=data, headers=request_headers, timeout=10)
         if response.status_code == 412:
             self.count_and_sleep()
             self.switch_proxy()
@@ -119,6 +128,76 @@ class BiliRequest:
                 f"412风控，切换代理到 {self.proxy_list[self.now_proxy_idx]}"
             )
             return self.post(url, data, isJson, extra_headers=extra_headers)
+        response.raise_for_status()
+        self.clear_request_count()
+        if response.json().get("msg", "") == "请先登录":
+            raise RuntimeError("当前未登录，请重新登陆")
+        return response
+
+    def _current_proxy(self):
+        if not self.proxy_list:
+            return None
+        current_proxy = self.proxy_list[self.now_proxy_idx]
+        if current_proxy == "none":
+            return None
+        return current_proxy
+
+    def close_http2_client(self):
+        if self._http2_client is not None:
+            self._http2_client.close()
+            self._http2_client = None
+            self._http2_client_proxy = None
+
+    def _get_http2_client(self):
+        if self._http2_unavailable:
+            raise ImportError("HTTP/2 support is unavailable")
+        current_proxy = self._current_proxy()
+        if (
+            self._http2_client is None
+            or self._http2_client_proxy != current_proxy
+            or self._http2_client.is_closed
+        ):
+            self.close_http2_client()
+            kwargs = {
+                "http2": True,
+                "timeout": 10,
+                "follow_redirects": False,
+            }
+            if current_proxy:
+                kwargs["proxy"] = current_proxy
+            try:
+                self._http2_client = httpx.Client(**kwargs)
+            except ImportError:
+                self._http2_unavailable = True
+                raise
+            self._http2_client_proxy = current_proxy
+        return self._http2_client
+
+    def post_http2(self, url, data=None, isJson=False, extra_headers=None):
+        self.headers["cookie"] = self.cookieManager.get_cookies_str()
+        request_headers = dict(self.headers)
+        if extra_headers:
+            request_headers.update(extra_headers)
+        try:
+            client = self._get_http2_client()
+        except ImportError as exc:
+            loguru.logger.warning(f"HTTP/2不可用，回退到HTTP/1.1: {exc}")
+            return self.post(url, data, isJson, extra_headers=extra_headers)
+
+        if isJson:
+            request_headers["Content-Type"] = "application/json"
+            response = client.post(url, json=data, headers=request_headers)
+        else:
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            response = client.post(url, data=data, headers=request_headers)
+
+        if response.status_code == 412:
+            self.count_and_sleep()
+            self.switch_proxy()
+            loguru.logger.warning(
+                f"412风控，切换代理到 {self.proxy_list[self.now_proxy_idx]}"
+            )
+            return self.post_http2(url, data, isJson, extra_headers=extra_headers)
         response.raise_for_status()
         self.clear_request_count()
         if response.json().get("msg", "") == "请先登录":

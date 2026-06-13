@@ -492,6 +492,8 @@ def upload_file(filepath):
 
         ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
         set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
+        account = util.main_request.cookieManager.add_account(cookie_list)
+        util.main_request.cookieManager.db.insert("cookie", account.cookies)
         name = util.main_request.get_request_name()
         gr.Info("导入成功", duration=5)
         yield [
@@ -514,6 +516,8 @@ def _save_cookie_list_as_login(cookie_list):
 
     ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
     set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
+    account = util.main_request.cookieManager.add_account(cookie_list)
+    util.main_request.cookieManager.db.insert("cookie", account.cookies)
     return util.main_request.get_request_name()
 
 
@@ -868,7 +872,10 @@ def setting_tab():
                             set_main_request(
                                 BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH)
                             )
-                            util.main_request.cookieManager.db.insert("cookie", cookies)
+                            account = util.main_request.cookieManager.add_account(cookies)
+                            util.main_request.cookieManager.db.insert(
+                                "cookie", account.cookies
+                            )
                             name = util.main_request.get_request_name()
                             if name:
                                 gr.Info("登录成功", duration=5)
@@ -1153,6 +1160,55 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                     scale=2,
                 )
 
+            def _get_account_choices():
+                accounts = util.main_request.cookieManager.get_accounts()
+                return [f"{a.uid} - {a.name} (Lv{a.level})" for a in accounts]
+
+            def _find_uid_from_choice(choice: str | None) -> str:
+                if not choice:
+                    return ""
+                return choice.split(" - ")[0] if " - " in choice else choice
+
+            def _get_default_account_choice() -> str | None:
+                accounts = util.main_request.cookieManager.get_accounts()
+                if not accounts:
+                    return None
+
+                active_uid = util.main_request.cookieManager.get_cookies_value("DedeUserID")
+                if active_uid is not None:
+                    active_uid = str(active_uid)
+                    for account in accounts:
+                        if account.uid == active_uid:
+                            return f"{account.uid} - {account.name} (Lv{account.level})"
+
+                first_account = accounts[0]
+                return f"{first_account.uid} - {first_account.name} (Lv{first_account.level})"
+
+            def _account_dropdown_update(value: str | None = None):
+                choices = _get_account_choices()
+                return gr.update(
+                    choices=choices,
+                    value=value if value is not None else _get_default_account_choice(),
+                )
+
+            def _activate_account(account) -> str:
+                ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
+                set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
+                util.main_request.cookieManager.db.insert("cookie", account.cookies)
+                return util.main_request.get_request_name()
+
+            with gr.Row(elem_classes="btb-action-row !items-end !gap-3 !flex-wrap"):
+                account_dropdown = gr.Dropdown(
+                    label="已保存账号",
+                    choices=_get_account_choices(),
+                    value=_get_default_account_choice,
+                    interactive=True,
+                    allow_custom_value=False,
+                    filterable=False,
+                    scale=4,
+                )
+                delete_account_btn = gr.Button("删除当前账号", variant="stop", scale=1)
+
             def generate_qrcode():
                 headers = {
                     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0",
@@ -1252,6 +1308,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                         gr.update(value=img_path, visible=True),
                         gr.update(value="未登录"),
                         gr.update(value=GLOBAL_COOKIE_PATH),
+                        gr.update(),
                         msg_or_key,
                         gr.update(visible=False),
                         gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
@@ -1261,6 +1318,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                     gr.update(value="", visible=False),
                     gr.update(value="未登录"),
                     gr.update(value=GLOBAL_COOKIE_PATH),
+                    gr.update(),
                     "",
                     gr.update(visible=False),
                     gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
@@ -1275,20 +1333,22 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                         gr.update(),
                         gr.update(),
                         gr.update(),
+                        gr.update(),
                     ]
                 msg, cookies = poll_login(key)
                 if cookies:
                     try:
-                        ConfigDB.insert("cookies_path", GLOBAL_COOKIE_PATH)
-                        set_main_request(BiliRequest(cookies_config_path=GLOBAL_COOKIE_PATH))
-                        util.main_request.cookieManager.db.insert("cookie", cookies)
-                        name = util.main_request.get_request_name()
+                        account = util.main_request.cookieManager.add_account(cookies)
+                        name = _activate_account(account)
                         visible = _is_logged_in(name)
                         if visible:
-                            gr.Info("登录成功", duration=5)
+                            gr.Info(f"已添加并切换至账号 {account.name}", duration=5)
                         return [
                             gr.update(value=name),
                             gr.update(value=GLOBAL_COOKIE_PATH),
+                            _account_dropdown_update(
+                                f"{account.uid} - {account.name} (Lv{account.level})"
+                            ),
                             gr.update(visible=False),
                             gr.update(visible=False),
                             gr.update(visible=visible),
@@ -1302,6 +1362,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 return [
                     gr.update(value=name),
                     gr.update(value=ConfigDB.get("cookies_path") or GLOBAL_COOKIE_PATH),
+                    gr.update(),
                     gr.update(),
                     gr.update(),
                     gr.update(visible=False),
@@ -1327,6 +1388,8 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 return [
                     updates[0],
                     updates[1],
+                    _account_dropdown_update(),
+                    gr.update(value=""),
                     gr.update(visible=visible),
                     gr.update(value="" if visible else '<p class="btb-muted">登录成功后显示项目与配置</p>'),
                 ]
@@ -1342,6 +1405,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 return [
                     gr.update(value=name if visible else "未登录"),
                     gr.update(value=GLOBAL_COOKIE_PATH),
+                    _account_dropdown_update(),
                     gr.update(value="" if visible else curl_text),
                     gr.update(visible=visible),
                     gr.update(value=_build_cookie_diagnostic_note(cookie_list, visible=visible)),
@@ -1353,6 +1417,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                     return [
                         gr.update(value="未登录"),
                         gr.update(value=GLOBAL_COOKIE_PATH),
+                        _account_dropdown_update(),
                         gr.update(visible=False),
                         gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
                     ]
@@ -1365,6 +1430,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                         return [
                             gr.update(value=name),
                             gr.update(value=cookies_path),
+                            _account_dropdown_update(),
                             gr.update(visible=True),
                             gr.update(value=""),
                         ]
@@ -1374,6 +1440,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 return [
                     gr.update(value="未登录"),
                     gr.update(value=cookies_path),
+                    _account_dropdown_update(),
                     gr.update(visible=False),
                     gr.update(value='<p class="btb-muted">登录文件已恢复，但登录状态可能已过期，请重新登录</p>'),
                 ]
@@ -1761,6 +1828,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
                 qr_img,
                 username_ui,
                 gr_file_ui,
+                account_dropdown,
                 qrcode_key_state,
                 project_wrap,
                 status_note,
@@ -1805,6 +1873,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
             outputs=[
                 username_ui,
                 gr_file_ui,
+                account_dropdown,
                 qr_img,
                 check_btn,
                 project_wrap,
@@ -1852,6 +1921,7 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
             [
                 username_ui,
                 gr_file_ui,
+                account_dropdown,
                 curl_login_ui,
                 project_wrap,
                 status_note,
@@ -1884,7 +1954,163 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
             outputs=[
                 username_ui,
                 gr_file_ui,
+                account_dropdown,
                 curl_login_ui,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
+        )
+
+        def on_account_change_with_reset(choice):
+            uid = _find_uid_from_choice(choice)
+            if not uid:
+                return [
+                    gr.update(),
+                    gr.update(),
+                    _account_dropdown_update(),
+                    gr.update(visible=False),
+                    gr.update(value='<p class="btb-muted">请选择一个已保存账号</p>'),
+                    *reset_project_config_ui(),
+                    *reset_go_config_ui(),
+                ]
+
+            account = util.main_request.cookieManager.find_by_uid(uid)
+            if account is None:
+                gr.Warning(f"未找到账号 {uid}", duration=5)
+                return [
+                    gr.update(),
+                    gr.update(),
+                    _account_dropdown_update(),
+                    gr.update(visible=False),
+                    gr.update(value='<p class="btb-muted">账号不存在，请重新登录或导入</p>'),
+                    *reset_project_config_ui(),
+                    *reset_go_config_ui(),
+                ]
+
+            name = _activate_account(account)
+            visible = _is_logged_in(name)
+            if visible:
+                gr.Info(f"已切换到账号 {account.name}", duration=5)
+            else:
+                gr.Warning(f"账号 {account.name} 的 cookies 可能已过期", duration=5)
+            return [
+                gr.update(value=name if visible else "未登录"),
+                gr.update(value=GLOBAL_COOKIE_PATH),
+                _account_dropdown_update(f"{account.uid} - {account.name} (Lv{account.level})"),
+                gr.update(visible=visible),
+                gr.update(value="" if visible else '<p class="btb-muted">当前账号登录状态可能已过期，请重新登录</p>'),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
+        def on_delete_account_with_reset(choice):
+            uid = _find_uid_from_choice(choice)
+            if not uid:
+                gr.Warning("请先选择一个账号", duration=5)
+                return [
+                    gr.update(),
+                    gr.update(),
+                    _account_dropdown_update(),
+                    gr.update(),
+                    gr.update(),
+                    *reset_project_config_ui(),
+                    *reset_go_config_ui(),
+                ]
+
+            account = util.main_request.cookieManager.find_by_uid(uid)
+            util.main_request.cookieManager.remove_account(uid)
+            accounts = util.main_request.cookieManager.get_accounts()
+            if accounts:
+                next_account = accounts[0]
+                name = _activate_account(next_account)
+                visible = _is_logged_in(name)
+                gr.Info(
+                    f"已删除账号 {account.name if account else uid}，并切换到 {next_account.name}",
+                    duration=5,
+                )
+                return [
+                    gr.update(value=name if visible else "未登录"),
+                    gr.update(value=GLOBAL_COOKIE_PATH),
+                    _account_dropdown_update(
+                        f"{next_account.uid} - {next_account.name} (Lv{next_account.level})"
+                    ),
+                    gr.update(visible=visible),
+                    gr.update(value="" if visible else '<p class="btb-muted">当前账号登录状态可能已过期，请重新登录</p>'),
+                    *reset_project_config_ui(),
+                    *reset_go_config_ui(),
+                ]
+
+            util.main_request.cookieManager.db.delete("cookie")
+            gr.Info(f"已删除账号 {account.name if account else uid}，当前无活跃账号", duration=5)
+            return [
+                gr.update(value="未登录"),
+                gr.update(value=GLOBAL_COOKIE_PATH),
+                _account_dropdown_update(None),
+                gr.update(visible=False),
+                gr.update(value='<p class="btb-muted">登录成功后显示项目与配置</p>'),
+                *reset_project_config_ui(),
+                *reset_go_config_ui(),
+            ]
+
+        account_dropdown.change(
+            on_account_change_with_reset,
+            inputs=[account_dropdown],
+            outputs=[
+                username_ui,
+                gr_file_ui,
+                account_dropdown,
+                project_wrap,
+                status_note,
+                ticket_id_ui,
+                ticket_info_ui,
+                people_ui,
+                address_ui,
+                inner,
+                info_ui,
+                data_ui,
+                people_buyer_name,
+                people_buyer_phone,
+                config_file_ui,
+                config_output_ui,
+                *(
+                    [
+                        go_handles["upload_ui"],
+                        go_handles["ticket_ui"],
+                        go_handles["auto_time_ui"],
+                    ]
+                    if go_handles
+                    else []
+                ),
+            ],
+        )
+
+        delete_account_btn.click(
+            on_delete_account_with_reset,
+            inputs=[account_dropdown],
+            outputs=[
+                username_ui,
+                gr_file_ui,
+                account_dropdown,
                 project_wrap,
                 status_note,
                 ticket_id_ui,
@@ -1914,7 +2140,13 @@ def setting_tab_v2(go_handles=None, tabs=None, demo=None):
             demo.load(
                 fn=restore_login_session,
                 inputs=None,
-                outputs=[username_ui, gr_file_ui, project_wrap, status_note],
+                outputs=[
+                    username_ui,
+                    gr_file_ui,
+                    account_dropdown,
+                    project_wrap,
+                    status_note,
+                ],
             )
             demo.load(
                 fn=restore_settings_draft,

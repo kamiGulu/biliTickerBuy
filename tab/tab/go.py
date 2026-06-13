@@ -594,6 +594,11 @@ def go_tab(demo: gr.Blocks):
                     ),
                     info="关闭后，抢票失败时将不再显示有趣的语录",
                 )
+                order_http2_ui = gr.Checkbox(
+                    label="prepare/createV2 使用 HTTP/2",
+                    value=bool(ConfigDB.get("go_order_http2")),
+                    info="仅影响下单主链路；如果接口或代理不稳定，关闭即可回退 HTTP/1.1",
+                )
 
         with gr.Row(
             elem_classes="btb-card !items-end !gap-3"
@@ -622,16 +627,24 @@ def go_tab(demo: gr.Blocks):
                 interactive=True,
             )
 
-    def save_go_preferences(interval, start_delay_ms, terminal, hide_random_message):
+    def save_go_preferences(
+        interval,
+        start_delay_ms,
+        terminal,
+        hide_random_message,
+        order_http2,
+    ):
         ConfigDB.insert("go_interval", interval)
         ConfigDB.insert("go_start_delay_ms", start_delay_ms)
         ConfigDB.insert("go_terminal", terminal)
         ConfigDB.insert("go_hide_random_message", hide_random_message)
+        ConfigDB.insert("go_order_http2", bool(order_http2))
         return _save_go_draft_patch(
             interval=interval,
             start_delay_ms=start_delay_ms,
             terminal=terminal,
             hide_random_message=hide_random_message,
+            order_http2=bool(order_http2),
         )
 
     def try_assign_endpoint(endpoint_url, payload):
@@ -663,6 +676,7 @@ def go_tab(demo: gr.Blocks):
         https_proxys,
         terminal_ui,
         hide_random_message,
+        order_http2,
     ):
         _save_go_draft_patch(
             files=_normalize_existing_files(files),
@@ -671,7 +685,9 @@ def go_tab(demo: gr.Blocks):
             interval=interval,
             terminal=terminal_ui,
             hide_random_message=hide_random_message,
+            order_http2=bool(order_http2),
         )
+        ConfigDB.insert("go_order_http2", bool(order_http2))
         if not files:
             return [gr.update(value=withTimeString("未提交抢票配置"), visible=True)]
         yield [
@@ -739,6 +755,11 @@ def go_tab(demo: gr.Blocks):
         "开始抢票",
         elem_classes="!rounded-xl !border border-emerald-300 dark:border-emerald-600 !px-5 !transition",
     )
+    go_status_ui = gr.Textbox(
+        label="启动状态",
+        interactive=False,
+        visible=False,
+    )
 
     _time_tmp = gr.Textbox(visible=False)
     _auto_fill_time_tmp = gr.Textbox(visible=False)
@@ -752,6 +773,8 @@ def go_tab(demo: gr.Blocks):
         terminal = draft.get("terminal") or ConfigDB.get("go_terminal")
         hide_random_message = draft.get("hide_random_message")
         saved_hide_random_message = ConfigDB.get("go_hide_random_message")
+        order_http2 = draft.get("order_http2")
+        saved_order_http2 = ConfigDB.get("go_order_http2")
         time_start = draft.get("time_start") or ""
 
         return [
@@ -768,6 +791,11 @@ def go_tab(demo: gr.Blocks):
                 value=hide_random_message
                 if isinstance(hide_random_message, bool)
                 else (saved_hide_random_message if saved_hide_random_message is not None else True)
+            ),
+            gr.update(
+                value=order_http2
+                if isinstance(order_http2, bool)
+                else bool(saved_order_http2)
             ),
             gr.update(value=time_start),
         ]
@@ -832,7 +860,8 @@ def go_tab(demo: gr.Blocks):
         """
 
     timer = gr.Textbox(label="定时更新", interactive=False, visible=False)
-    demo.load(fn=tick, inputs=None, outputs=timer, every=1)
+    refresh_timer = gr.Timer(1)
+    refresh_timer.tick(fn=tick, inputs=None, outputs=timer)
     demo.load(
         fn=refresh_order_mode_status,
         inputs=None,
@@ -861,7 +890,9 @@ def go_tab(demo: gr.Blocks):
             https_proxy_ui,
             terminal_ui,
             show_random_message_ui,
+            order_http2_ui,
         ],
+        outputs=go_status_ui,
     )
 
     _auto_fill_time_tmp.change(
@@ -882,22 +913,57 @@ def go_tab(demo: gr.Blocks):
 
     interval_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
+        inputs=[
+            interval_ui,
+            start_delay_ui,
+            terminal_ui,
+            show_random_message_ui,
+            order_http2_ui,
+        ],
         outputs=go_draft_state,
     )
     start_delay_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
+        inputs=[
+            interval_ui,
+            start_delay_ui,
+            terminal_ui,
+            show_random_message_ui,
+            order_http2_ui,
+        ],
         outputs=go_draft_state,
     )
     terminal_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
+        inputs=[
+            interval_ui,
+            start_delay_ui,
+            terminal_ui,
+            show_random_message_ui,
+            order_http2_ui,
+        ],
         outputs=go_draft_state,
     )
     show_random_message_ui.change(
         fn=save_go_preferences,
-        inputs=[interval_ui, start_delay_ui, terminal_ui, show_random_message_ui],
+        inputs=[
+            interval_ui,
+            start_delay_ui,
+            terminal_ui,
+            show_random_message_ui,
+            order_http2_ui,
+        ],
+        outputs=go_draft_state,
+    )
+    order_http2_ui.change(
+        fn=save_go_preferences,
+        inputs=[
+            interval_ui,
+            start_delay_ui,
+            terminal_ui,
+            show_random_message_ui,
+            order_http2_ui,
+        ],
         outputs=go_draft_state,
     )
 
@@ -911,6 +977,7 @@ def go_tab(demo: gr.Blocks):
             start_delay_ui,
             terminal_ui,
             show_random_message_ui,
+            order_http2_ui,
             _auto_fill_time_tmp,
         ],
     )

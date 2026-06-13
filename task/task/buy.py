@@ -410,6 +410,13 @@ def buy_stream(
         cookies=cookies,
         proxy=https_proxys,
     )
+    order_http2_config = ConfigDB.get("go_order_http2")
+    use_order_http2 = (
+        str(os.environ.get("BTB_ORDER_HTTP2", "")).strip().lower()
+        in {"1", "true", "yes", "y", "on"}
+        or bool(order_http2_config)
+    )
+    order_post = _request.post_http2 if use_order_http2 else _request.post
 
     is_hot_project = bool(tickets_info.get("is_hot_project", False))
     prepare_retry_interval_seconds = max(interval, 1000) / 1000
@@ -507,6 +514,7 @@ def buy_stream(
 
             yield "1）订单准备"
             yield f"下单模式: {'移动端' if order_mode == 'mobile' else '网页端'}"
+            yield f"prepare/createV2 HTTP版本: {'HTTP/2' if use_order_http2 else 'HTTP/1.1'}"
             yield f"Cookie 特征: {_describe_cookie_capabilities(cookies)}"
             if order_mode == "mobile":
                 risk_header = _build_create_risk_header(cookies)
@@ -525,7 +533,7 @@ def buy_stream(
                     session=ctoken_session_key[:8],
                     token_len=len(token_payload["token"]),
                 )
-            request_result_normal = _request.post(
+            request_result_normal = order_post(
                 url=f"{base_url}/api/ticket/order/prepare?project_id={tickets_info['project_id']}",
                 data=token_payload,
                 isJson=True,
@@ -587,7 +595,7 @@ def buy_stream(
                     )
                     if risk_header:
                         extra_headers["x-risk-header"] = risk_header
-                    ret = _request.post(
+                    ret = order_post(
                         url=url,
                         data=payload,
                         isJson=True,
@@ -702,6 +710,19 @@ def buy(
         logger.info(msg)
 
 
+def _find_source_main_py() -> str | None:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        main_py = os.path.join(current_dir, "main.py")
+        if os.path.exists(main_py):
+            return main_py
+
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir == current_dir:
+            return None
+        current_dir = parent_dir
+
+
 def buy_new_terminal(
     endpoint_url,
     tickets_info,
@@ -728,11 +749,9 @@ def buy_new_terminal(
     if getattr(sys, "frozen", False):
         command = [sys.executable]
     else:
-        # 2️⃣ 源码模式：检查「当前脚本目录」是否有 main.py
-        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        main_py = os.path.join(script_dir, "main.py")
-
-        if os.path.exists(main_py):
+        # 2️⃣ 源码模式：从当前包路径向上寻找项目入口
+        main_py = _find_source_main_py()
+        if main_py and os.path.exists(main_py):
             command = [sys.executable, main_py]
         # 3️⃣ 兜底：使用 btb（pip / pipx）
         else:
